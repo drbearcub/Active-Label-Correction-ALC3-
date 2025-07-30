@@ -12,16 +12,16 @@ transformers.logging.set_verbosity_error()
 
 # Load fine-tuned model and tokenizer once
 print("Loading model …")
-model = AutoModelForCausalLM.from_pretrained("./trainedmodel")
-tokenizer = AutoTokenizer.from_pretrained("./trainedmodel")
+model = AutoModelForCausalLM.from_pretrained("models/trainedmodelspecialtokens")
+tokenizer = AutoTokenizer.from_pretrained("models/trainedmodelspecialtokens")
 generator = pipeline("text-generation", model=model, tokenizer=tokenizer, device=0 if model.device.type == "cuda" else -1)
 print("Model ready.\n")
 
 # Parameters
-DATA_PATH = Path("smoldata.txt")
+DATA_PATH = Path("data/reduced.txt")
 MAX_NEW_DEFAULT = 128  # fallback cap if prompt already near the context window
-OUTPUT_PATH = Path("inference_results.jsonl")
-PROB_PATH = Path("probability.jsonl")
+OUTPUT_PATH = Path("results/inference_results.jsonl")
+PROB_PATH = Path("results/probability.jsonl")
 MAX_EXAMPLES = None  # Set to an int to limit, or None to process all examples
 
 

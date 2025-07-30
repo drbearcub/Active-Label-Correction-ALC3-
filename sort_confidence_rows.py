@@ -21,7 +21,7 @@ import json
 from pathlib import Path
 from typing import List, Dict
 
-DEFAULT_FILE = Path("probability.jsonl")
+DEFAULT_FILE = Path("results/probability.jsonl")
 DEFAULT_METRICS = ["prob_product", "geo_mean"]
 
 

@@ -239,14 +239,13 @@ def parse_args():
 
     arg_list = [
         '--model_name_or_path', 'openai-community/gpt2',
-        '--train_file', 'smallnospace.txt',
+        '--train_file', 'data/reduced.txt',
         '--validation_split_percentage', '5',
         '--per_device_train_batch_size', '1',
         '--per_device_eval_batch_size', '1',
         '--num_train_epochs', '3',
-        '--output_dir', 'trainedmodelspecialtokens',
+        '--output_dir', 'models/trainedmodelspecialtokens',
         '--gradient_accumulation_steps', '10',
-        #'--no_keep_linebreaks'
     ]
     args = parser.parse_args(arg_list)
 
