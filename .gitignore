@@ -49,3 +49,7 @@ data/
 models/
 confidence_scores.png/
 results/
+
+# Active Label Correction outputs
+alcmodels/
+alcIterations/

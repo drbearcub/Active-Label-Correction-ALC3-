@@ -12,19 +12,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
-
-# How to call this script
-# python trainer.py \
-#     --model_name_or_path openai-community/gpt2 \
-#     --train_file data/reduced.txt \
-#     --validation_split_percentage 5 \
-#     --per_device_train_batch_size 1 \
-#     --per_device_eval_batch_size 1 \
-#     --num_train_epochs 3 \
-#     --output_dir models/trainedmodelspecialtokens \
-#     --gradient_accumulation_steps 10
-
 """
 Fine-tuning the library models for causal language modeling (GPT, GPT-2, CTRL, ...)
 on a text file or a dataset without using HuggingFace Trainer.
@@ -250,7 +237,17 @@ def parse_args():
         ),
     )
 
-    args = parser.parse_args()
+    arg_list = [
+        '--model_name_or_path', 'openai-community/gpt2',
+        '--train_file', 'data/reduced.txt',
+        '--validation_split_percentage', '5',
+        '--per_device_train_batch_size', '1',
+        '--per_device_eval_batch_size', '1',
+        '--num_train_epochs', '3',
+        '--output_dir', 'models/trainedmodelspecialtokens',
+        '--gradient_accumulation_steps', '10',
+    ]
+    args = parser.parse_args(arg_list)
 
     # Sanity checks
     if args.dataset_name is None and args.train_file is None and args.validation_file is None:
