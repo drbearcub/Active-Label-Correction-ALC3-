@@ -15,9 +15,9 @@
 
 
 # How to call this script
-# python trainer.py \
+# python trainer_json.py \
 #     --model_name_or_path openai-community/gpt2 \
-#     --train_file data/reduced.txt \
+#     --train_file data/dataset.json \
 #     --validation_split_percentage 5 \
 #     --per_device_train_batch_size 1 \
 #     --per_device_eval_batch_size 1 \
@@ -27,7 +27,7 @@
 
 """
 Fine-tuning the library models for causal language modeling (GPT, GPT-2, CTRL, ...)
-on a text file or a dataset without using HuggingFace Trainer.
+on a JSON file containing prompt-completion pairs without using HuggingFace Trainer.
 
 Here is the full list of checkpoints on the hub that can be fine-tuned by this script:
 https://huggingface.co/models?filter=text-generation
@@ -94,14 +94,15 @@ def parse_args():
         help="The configuration name of the dataset to use (via the datasets library).",
     )
     parser.add_argument(
-        "--train_file", type=str, default=None, help="A csv, txt or a json file containing the training data."
+        "--train_file", type=str, default=None, help="A JSON file containing the training data with prompt-completion pairs."
     )
     parser.add_argument(
-        "--validation_file", type=str, default=None, help="A csv, txt or a json file containing the validation data."
+        "--validation_file", type=str, default=None, help="A JSON file containing the validation data with prompt-completion pairs."
     )
     parser.add_argument(
         "--validation_split_percentage",
         default=5,
+        type=int,
         help="The percentage of the train set used as validation set in case there's no validation split",
     )
     parser.add_argument(
@@ -197,9 +198,6 @@ def parse_args():
     parser.add_argument(
         "--overwrite_cache", action="store_true", help="Overwrite the cached training and evaluation sets"
     )
-    parser.add_argument(
-        "--no_keep_linebreaks", action="store_true", help="Do not keep line breaks when using TXT files."
-    )
     parser.add_argument("--push_to_hub", action="store_true", help="Whether or not to push the model to the Hub.")
     parser.add_argument(
         "--hub_model_id", type=str, help="The name of the repository to keep in sync with the local `output_dir`."
@@ -258,12 +256,12 @@ def parse_args():
     else:
         if args.train_file is not None:
             extension = args.train_file.split(".")[-1]
-            if extension not in ["csv", "json", "txt"]:
-                raise ValueError("`train_file` should be a csv, json or txt file.")
+            if extension not in ["json"]:
+                raise ValueError("`train_file` should be a JSON file.")
         if args.validation_file is not None:
             extension = args.validation_file.split(".")[-1]
-            if extension not in ["csv", "json", "txt"]:
-                raise ValueError("`validation_file` should be a csv, json or txt file.")
+            if extension not in ["json"]:
+                raise ValueError("`validation_file` should be a JSON file.")
 
     if args.push_to_hub:
         if args.output_dir is None:
@@ -271,41 +269,40 @@ def parse_args():
 
     return args
 
-# ADD THIS NEW FUNCTION TO YOUR SCRIPT
-
-# run the tokenizer on the tokenized input and check if it matches the output, sometimes tokenizer would refuse to tokenize some characters
-def preprocess_for_qa(examples, tokenizer, block_size):
+def preprocess_for_qa_json(examples, tokenizer, block_size):
     """
-    Preprocesses the data to create masked labels for question-answering fine-tuning.
-    The loss will only be calculated on the text that comes after '[ResolvedQuery]'.
+    Preprocesses the JSON data to create masked labels for question-answering fine-tuning.
+    The loss will only be calculated on the completion part.
+    
+    Expected input format: {"prompt": "...[ResolvedQuery]", "completion": "answer"}
     """
-    split_token = "[ResolvedQuery]"
     eos_id = tokenizer.eos_token_id
 
     outputs = {"input_ids": [], "attention_mask": [], "labels": []}
-    for text in examples['text']:
-        text = text.strip()
-        print("["+text+"]");
-        enc = tokenizer(text,
+    
+    for prompt, completion in zip(examples['prompt'], examples['completion']):
+        # Combine prompt and completion to create the full text
+        full_text = prompt + completion
+        
+        print(f"[Processing] {full_text}")
+        
+        # Tokenize the full text
+        enc = tokenizer(full_text,
                         truncation=True,
                         max_length=block_size-1,
                         add_special_tokens=False)
 
         input_ids = enc["input_ids"] + [eos_id]
-        labels     = input_ids.copy()
+        labels = input_ids.copy()
 
-        # ③ mask everything up to and incl. "[ResolvedQuery]"
-        split_ids = tokenizer(split_token,
-                              add_special_tokens=False).input_ids
-        ans_start = next(
-            (i + len(split_ids)
-             for i in range(len(input_ids)-len(split_ids)+1)
-             if input_ids[i : i+len(split_ids)] == split_ids),
-            -1,
-        )
-        if ans_start != -1:
-            for i in range(ans_start):
-                labels[i] = -100                      # ignore prompt tokens
+        # Tokenize just the prompt to find where to start unmasking
+        prompt_enc = tokenizer(prompt,
+                              add_special_tokens=False)
+        prompt_length = len(prompt_enc["input_ids"])
+        
+        # Mask the prompt tokens (set to -100 so they don't contribute to loss)
+        for i in range(min(prompt_length, len(labels))):
+            labels[i] = -100
 
         outputs["input_ids"].append(input_ids)
         outputs["attention_mask"].append([1] * len(input_ids))
@@ -333,7 +330,7 @@ def main():
         accelerator_log_kwargs["log_with"] = args.report_to
         accelerator_log_kwargs["project_dir"] = args.output_dir
 
-    # Always use pf16 mixed-precision (requires hardware support)
+    # Always use fp16 mixed-precision (requires hardware support)
     accelerator = Accelerator(
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         mixed_precision="fp16",
@@ -378,12 +375,11 @@ def main():
             os.makedirs(args.output_dir, exist_ok=True)
     accelerator.wait_for_everyone()
 
-    # Get the datasets: you can either provide your own CSV/JSON/TXT training and evaluation files (see below)
+    # Get the datasets: you can either provide your own JSON training and evaluation files
     # or just provide the name of one of the public datasets available on the hub at https://huggingface.co/datasets/
     # (the dataset will be downloaded automatically from the datasets Hub).
     #
-    # For CSV/JSON files, this script will use the column called 'text' or the first column if no column called
-    # 'text' is found. You can easily tweak this behavior (see below).
+    # For JSON files, this script will use the columns 'prompt' and 'completion'.
     #
     # In distributed training, the load_dataset function guarantee that only one local process can concurrently
     # download the dataset.
@@ -408,30 +404,23 @@ def main():
             )
     else:
         data_files = {}
-        dataset_args = {}
         if args.train_file is not None:
             data_files["train"] = args.train_file
-            extension = args.train_file.split(".")[-1]
         if args.validation_file is not None:
             data_files["validation"] = args.validation_file
-            extension = args.validation_file.split(".")[-1]
-        if extension == "txt":
-            extension = "text"
-            dataset_args["keep_linebreaks"] = not args.no_keep_linebreaks
-        raw_datasets = load_dataset(extension, data_files=data_files, **dataset_args)
+        extension = "json"
+        raw_datasets = load_dataset(extension, data_files=data_files)
         # If no validation data is there, validation_split_percentage will be used to divide the dataset.
         if "validation" not in raw_datasets.keys():
             raw_datasets["validation"] = load_dataset(
                 extension,
                 data_files=data_files,
                 split=f"train[:{args.validation_split_percentage}%]",
-                **dataset_args,
             )
             raw_datasets["train"] = load_dataset(
                 extension,
                 data_files=data_files,
                 split=f"train[{args.validation_split_percentage}%:]",
-                **dataset_args,
             )
 
     # See more about loading any type of standard or custom dataset (from files, python dict, pandas DataFrame, etc) at
@@ -504,7 +493,7 @@ def main():
     if len(tokenizer) > embedding_size:
         model.resize_token_embeddings(len(tokenizer))
 
-    # ------------- Custom QA-style preprocessing -------------
+    # ------------- Custom QA-style preprocessing for JSON -------------
     # Determine the block size (maximum sequence length) first.
     if args.block_size is None:
         block_size = tokenizer.model_max_length
@@ -522,11 +511,10 @@ def main():
             )
         block_size = min(args.block_size, tokenizer.model_max_length)
 
-    # Apply preprocessing that masks labels so loss is only computed on the answer
-    # (everything *after* the '[ResolvedQuery]' marker).
+    # Apply preprocessing that masks labels so loss is only computed on the completion
     with accelerator.main_process_first():
         qa_datasets = raw_datasets.map(
-            lambda examples: preprocess_for_qa(examples, tokenizer, block_size),
+            lambda examples: preprocess_for_qa_json(examples, tokenizer, block_size),
             batched=True,
             num_proc=args.preprocessing_num_workers,
             remove_columns=raw_datasets["train"].column_names,
@@ -540,7 +528,7 @@ def main():
     eval_dataset = lm_datasets["validation"]
 
     # Log a few random samples from the training set:
-    for index in random.sample(range(len(train_dataset)), 3):
+    for index in random.sample(range(len(train_dataset)), min(3, len(train_dataset))):
         logger.info(f"Sample {index} of the training set: {train_dataset[index]}.")
 
     # DataLoaders creation:
@@ -553,9 +541,6 @@ def main():
 
     # Optimizer
     # Split weights in two groups, one with weight decay and the other not.
-
-
-    # [david] end of change
     no_decay = ["bias", "layer_norm.weight"]
     optimizer_grouped_parameters = [
         {

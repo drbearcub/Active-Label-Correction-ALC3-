@@ -12,7 +12,7 @@ transformers.logging.set_verbosity_error()
 # -----------------------------------------------------------------------------
 # Configuration
 # -----------------------------------------------------------------------------
-MODEL_PATH = Path("./trainedmodelspecialtokens")
+MODEL_PATH = Path("./models/trainedmodel_json")
 INPUT_TEXT = "[Course] Eng_srtc [UserQuery] what is the steps of the research process  [ResolvedQuery] what is the steps of the research process "
 
 
