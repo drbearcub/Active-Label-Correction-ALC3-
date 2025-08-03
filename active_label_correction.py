@@ -24,13 +24,7 @@ import sys
 from pathlib import Path
 from typing import List, Dict, Any
 import argparse
-
-try:
-    import anthropic
-except ImportError:
-    print("⚠️  Warning: anthropic package not installed. Install with: pip install anthropic")
-    anthropic = None
-
+import anthropic
 
 class ALCPipeline:
     def __init__(self, iterations: int = 5, initial_data: str = "data/reduced.txt"):
@@ -44,8 +38,6 @@ class ALCPipeline:
         self.anthropic_api_key = self.load_api_key()
         if not self.anthropic_api_key:
             print("⚠️  Warning: ANTHROPIC_API_KEY not found")
-            print("   Option 1: Create secrets.json file: {'ANTHROPIC_API_KEY': 'your_key_here'}")
-            print("   Option 2: Set environment variable: export ANTHROPIC_API_KEY=your_key_here")
         else:
             print("✓ Found ANTHROPIC_API_KEY")
         
@@ -56,7 +48,6 @@ class ALCPipeline:
     
     def load_api_key(self) -> str:
         """Load API key from secrets.json file or environment variable."""
-        # Try to load from secrets.json file first
         secrets_file = Path("secrets.json")
         if secrets_file.exists():
             try:
@@ -64,7 +55,6 @@ class ALCPipeline:
                     secrets = json.load(f)
                     api_key = secrets.get("ANTHROPIC_API_KEY")
                     if api_key:
-                        # Clean the API key of any whitespace
                         api_key = api_key.strip()
                         print("✓ Loaded API key from secrets.json")
                         return api_key
@@ -342,10 +332,6 @@ class ALCPipeline:
     
     def call_anthropic_for_correction(self, full_prompt: str) -> str:
         """Call Anthropic API to correct spelling and grammar in the full prompt."""
-        # Debug information
-        print(f"🔍 Debug: API key exists: {bool(self.anthropic_api_key)}")
-        print(f"🔍 Debug: API key length: {len(self.anthropic_api_key) if self.anthropic_api_key else 0}")
-        print(f"🔍 Debug: Anthropic package available: {anthropic is not None}")
         
         if not self.anthropic_api_key or anthropic is None:
             print("❌ Cannot call Anthropic API: Missing API key or package")
