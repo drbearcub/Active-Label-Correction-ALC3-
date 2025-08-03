@@ -53,3 +53,6 @@ results/
 # Active Label Correction outputs
 alcmodels/
 alcIterations/
+
+# Secrets and API keys
+secrets.json

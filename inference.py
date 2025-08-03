@@ -159,14 +159,14 @@ def main():
             matches_completion = answer == completion
             print("MATCHES COMPLETION:", matches_completion)
             
-            print("TOKEN PROBABILITIES (with top-5 choices):")
-            for idx, info in enumerate(token_details, 1):
-                tok = info["token"]
-                prob = info["prob"]
-                print(f"Step {idx}: {tok}\t{prob:.6f}")
-                for cand_tok, cand_prob in info["top5"]:
-                    print(f"    {cand_tok}\t{cand_prob:.6f}")
-            print("=" * 80)
+            # print("TOKEN PROBABILITIES (with top-5 choices):")
+            # for idx, info in enumerate(token_details, 1):
+            #     tok = info["token"]
+            #     prob = info["prob"]
+            #     print(f"Step {idx}: {tok}\t{prob:.6f}")
+            #     for cand_tok, cand_prob in info["top5"]:
+            #         print(f"    {cand_tok}\t{cand_prob:.6f}")
+            # print("=" * 80)
 
             # Write prompt + answer as a single JSONL entry
             concat_text = f"{prompt} {answer}".strip()
