@@ -56,3 +56,5 @@ alcIterations/
 
 # Secrets and API keys
 secrets.json
+
+rawdata/

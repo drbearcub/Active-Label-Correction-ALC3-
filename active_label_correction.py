@@ -3,13 +3,15 @@
 Active Label Correction (ALC) Pipeline
 
 This script implements an iterative process to improve dataset quality through:
-1. Training a model on the current dataset
+1. Training a model on the current JSON dataset (prompt-completion pairs)
 2. Running inference to get confidence scores
 3. Sorting probability results by confidence metrics
 4. Auto-correcting the most confident incorrect prediction
 5. Ranking autocorrected data by forced_geo_mean (lowest first)
 6. Human annotation using Anthropic API on the 2 lowest confidence rows
-7. Creating the corrected dataset for the next iteration
+7. Creating the corrected JSON dataset for the next iteration
+
+Dataset Format: JSON files with [{"prompt": "...", "completion": "..."}, ...]
 
 API Key Configuration:
 - Option 1: Create secrets.json file with {"ANTHROPIC_API_KEY": "your_key_here"}
@@ -27,7 +29,7 @@ import argparse
 import anthropic
 
 class ALCPipeline:
-    def __init__(self, iterations: int = 5, initial_data: str = "data/reduced.txt"):
+    def __init__(self, iterations: int = 5, initial_data: str = "alcIterations/iteration_0_dataset.json"):
         self.iterations = iterations
         self.initial_data = Path(initial_data)
         self.alc_dir = Path("alcIterations")
@@ -64,17 +66,7 @@ class ALCPipeline:
             print("⚠️  Warning: secrets.json not found")
         
         return None
-        
-    def setup_initial_dataset(self) -> Path:
-        """Copy the initial dataset to start the ALC process."""
-        if not self.initial_data.exists():
-            raise FileNotFoundError(f"Initial dataset not found: {self.initial_data}")
-        
-        initial_copy = self.alc_dir / "iteration_0_dataset.txt"
-        shutil.copy2(self.initial_data, initial_copy)
-        print(f"✓ Initial dataset copied to {initial_copy}")
-        return initial_copy
-        
+
     def run_training(self, train_file: Path, output_model: Path) -> bool:
         """Run the training using command line arguments."""
         print(f"🔄 Training model (iteration {self.current_iteration})...")
@@ -86,7 +78,7 @@ class ALCPipeline:
             prev_model = self.models_dir / f"iteration_{self.current_iteration-1}"
             base_model = str(prev_model)
         
-        # Build command arguments for trainer.py
+        # Build command arguments for trainer_json.py
         cmd = [
             sys.executable, "trainer.py",
             "--model_name_or_path", base_model,
@@ -284,16 +276,20 @@ class ALCPipeline:
             print(f"✓ Loaded {len(rows)} rows from {corrected_file}")
             
             # Create next iteration dataset file
-            next_dataset = self.alc_dir / f"iteration_{self.current_iteration + 1}_dataset.txt"
+            next_dataset = self.alc_dir / f"iteration_{self.current_iteration + 1}_dataset.json"
             
-            # Write concatenated prompt + completion for each row
+            # Write JSON format with separate prompt and completion fields
+            json_data = []
+            for row in rows:
+                prompt = row.get('prompt', '')
+                completion = row.get('completion', '')
+                json_data.append({
+                    "prompt": prompt,
+                    "completion": completion
+                })
+            
             with next_dataset.open("w") as f:
-                for row in rows:
-                    prompt = row.get('prompt', '')
-                    completion = row.get('completion', '')
-                    # Concatenate prompt and completion
-                    combined_text = f"{prompt}{completion}"
-                    f.write(combined_text + '\n')
+                json.dump(json_data, f, indent=2, ensure_ascii=False)
             
             print(f"✓ Created dataset for next iteration: {next_dataset}")
             print(f"✓ Dataset contains {len(rows)} examples with human-annotated labels")
@@ -460,7 +456,7 @@ class ALCPipeline:
         - Auto-corrected: alcIterations/iteration_X_probabilities_autocorrected.jsonl
         - Ranked by forced_geo_mean: alcIterations/iteration_X_probabilities_ranked_by_forced_geo_mean.jsonl
         - Human annotated: alcIterations/iteration_X_probabilities_human_annotated.jsonl
-        - Next dataset: alcIterations/iteration_{X+1}_dataset.txt
+        - Next dataset: alcIterations/iteration_{X+1}_dataset.json
         """
         print(f"\n{'='*50}")
         print(f"Starting ALC Iteration {self.current_iteration}")
@@ -471,9 +467,9 @@ class ALCPipeline:
         prob_output = self.alc_dir / f"iteration_{self.current_iteration}_probabilities.jsonl"
 
         try:
-            # Step 1: Run training
-            if not self.run_training(current_dataset, model_output):
-                return None
+            # # Step 1: Run training
+            # if not self.run_training(current_dataset, model_output):
+            #     return None
 
             # Step 2: Run inference
             if not self.run_inference(model_output, current_dataset, prob_output):
@@ -513,7 +509,7 @@ class ALCPipeline:
         print(f"📊 Running {self.iterations} iterations")
         
         # Setup initial dataset
-        current_dataset = self.setup_initial_dataset()
+        current_dataset = "alcIterations/iteration_0_dataset.json"
         
         print(f"Current dataset is: {current_dataset}")
         # Run iterations (just training for now)
@@ -529,7 +525,7 @@ class ALCPipeline:
         
         print(f"\n🎉 ALC Pipeline completed!")
         print(f"📁 Results saved in: {self.alc_dir}")
-        print(f"   - Dataset files: iteration_X_dataset.txt")
+        print(f"   - Dataset files: iteration_X_dataset.json")
         print(f"   - Probability files: iteration_X_probabilities.jsonl")
         print(f"   - Sorted files: iteration_X_probabilities_geo_mean_sorted.jsonl")
         print(f"   - Auto-corrected files: iteration_X_probabilities_autocorrected.jsonl")
@@ -551,7 +547,7 @@ def main():
     parser.add_argument(
         "--initial_data", 
         type=str, 
-        default="data/reduced.txt", 
+        default="alcIterations/iteration_0_dataset.json", 
         help="Path to initial dataset"
     )
     

@@ -14,7 +14,7 @@ transformers.logging.set_verbosity_error()
 # -----------------------------------------------------------------------------
 # Configuration
 # -----------------------------------------------------------------------------
-MODEL_PATH = Path("./models/trainedmodel_json")
+MODEL_PATH = Path("./models/trained_model_json")
 PROMPT = "[Course]Eng_srtc[UserQuery]what is the steps of the research process[ResolvedQuery]"
 FORCED = "what is the steps of the research process"
 

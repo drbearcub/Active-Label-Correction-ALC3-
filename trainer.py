@@ -15,14 +15,14 @@
 
 
 # How to call this script
-# python trainer_json.py \
+# python trainer.py \
 #     --model_name_or_path openai-community/gpt2 \
 #     --train_file data/dataset.json \
 #     --validation_split_percentage 5 \
 #     --per_device_train_batch_size 1 \
 #     --per_device_eval_batch_size 1 \
 #     --num_train_epochs 3 \
-#     --output_dir models/trainedmodelspecialtokens \
+#     --output_dir models/trained_model_json \
 #     --gradient_accumulation_steps 10
 
 """
@@ -280,8 +280,10 @@ def preprocess_for_qa_json(examples, tokenizer, block_size):
 
     outputs = {"input_ids": [], "attention_mask": [], "labels": []}
     
-    for prompt, completion in zip(examples['prompt'], examples['completion']):
+    for courseName, userQuery, completion in zip(examples['course_name'], examples['user_query'], examples['completion.']):
         # Combine prompt and completion to create the full text
+        print(courseName, userQuery, completion)
+        prompt = courseName + userQuery
         full_text = prompt + completion
         
         print(f"[Processing] {full_text}")
