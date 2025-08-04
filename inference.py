@@ -4,7 +4,6 @@
 #     --model_path models/trainedmodelspecialtokens \
 #     --data_path data/output.json \
 #     --prob_output_path results/probability.jsonl \
-#     --inference_output_path results/inference_results.jsonl
 
 import argparse
 import json
@@ -43,14 +42,8 @@ def parse_args():
     parser.add_argument(
         "--prob_output_path",
         type=str,
-        default="results/probability.jsonl",
+        default="results/probability.json",
         help="Path to save probability results"
-    )
-    parser.add_argument(
-        "--inference_output_path",
-        type=str,
-        default="results/inference_results.jsonl",
-        help="Path to save inference results"
     )
 
     return parser.parse_args()
@@ -131,7 +124,6 @@ def main():
     # Convert string paths to Path objects
     data_path = Path(args.data_path)
     prob_path = Path(args.prob_output_path)
-    output_path = Path(args.inference_output_path)
     model_path = args.model_path
 
     # Load fine-tuned model and tokenizer
@@ -149,19 +141,12 @@ def main():
         with data_path.open('r', encoding='utf-8') as f:
             data_source = json.load(f)
 
-        row_id = 0
-        with output_path.open("w") as out_f, prob_path.open("w") as prob_f:
+        with prob_path.open("w") as prob_f:
             iterable = tqdm(data_source, desc="Generating", unit="example")
             for idx, item in enumerate(iterable):
-                if MAX_EXAMPLES is not None and idx >= MAX_EXAMPLES:
-                    break
 
-                # Strip whitespace if the item is a line from a text file
-                item_to_process = item.strip() if isinstance(item, str) else item
-                if not item_to_process:
-                    continue
-
-                prompt, completion = split_prompt_completion(item_to_process)
+                print(item)
+                prompt, completion = split_prompt_completion(item)
 
                 try:
                     answer, token_details = generate_answer(prompt, model, tokenizer)
@@ -177,11 +162,6 @@ def main():
                 matches_completion = answer == completion
                 print("MATCHES COMPLETION:", matches_completion)
                 print("=" * 80)
-
-                # Write prompt + answer as a single JSONL entry
-                concat_text = f"{prompt} {answer}".strip()
-                json.dump({"text": concat_text}, out_f)
-                out_f.write("\n")
 
                 # Aggregate probability statistics for inference
                 probs = [info["prob"] for info in token_details]
@@ -202,18 +182,17 @@ def main():
                     geo_mean_forced = math.exp(avg_log_prob_forced)
 
                 # Save probabilities for each generated token
-                prob_entry = {
-                    "inference": answer,
-                    output.json
-                    "matches_completion": matches_completion,
-                    "geo_mean": geo_mean,
-                    "forced_geo_mean": geo_mean_forced,
-                    "probabilities": probs,
-                    "forced_probabilities": forced_token_probs,
-                }
-                json.dump(prob_entry, prob_f)
+                newItem = item
+                newItem["inference"] = answer
+                newItem["matches_completion"] = matches_completion
+                newItem["geo_mean"] = geo_mean
+                newItem["forced_geo_mean"] = geo_mean_forced
+                newItem["probabilities"] = probs
+                newItem["forced_probabilities"] = forced_token_probs
+
+                json.dump(newItem, prob_f)
                 prob_f.write("\n")
-                row_id += 1
+
     finally:
         # Ensure the file handle for line-based files is closed
         if data_source and hasattr(data_source, 'close'):
