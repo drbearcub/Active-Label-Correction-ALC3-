@@ -13,7 +13,7 @@ transformers.logging.set_verbosity_error()
 # Configuration
 # -----------------------------------------------------------------------------
 MODEL_PATH = Path("./models/trained_model_json")
-INPUT_TEXT = "[CourseName]KBAI[UserQuery]what should I study for the final exam[ResolvedQuery]"
+INPUT_TEXT = "[CourseName]KBAI[UserQuery]In the project desription I read that we can borrow content from previous RPM milestones that we wrote. Does this mean that we can just copy paste full sections of previous milestones? Should those sections be cited? I saw post #1902 and it seems that this is the case but wanted to make sure since if this is the case I am very happy with how my previous milestones were worded and would then plan to make the final project a patchwork of my previous work. [ResolvedQuery]"
 
 
 # -----------------------------------------------------------------------------

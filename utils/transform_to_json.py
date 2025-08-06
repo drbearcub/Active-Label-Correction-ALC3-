@@ -35,6 +35,7 @@ def transform_jsonl_to_json(input_file_path, output_file_path):
                     'course_name': '[CourseName]' + course_name,
                     'user_query': '[UserQuery]' + user_query + '[ResolvedQuery]',
                     'completion.': original_record.get('gpt3_5_jill'),
+                    'human_annotation': original_record.get('gpt4o'),
                     'groundtruth': original_record.get('ground_truth'),
                     'pastchat': original_record.get('pastChat', [])
                 }
@@ -61,7 +62,7 @@ def transform_jsonl_to_json(input_file_path, output_file_path):
 # --- How to use the script ---
 
 # 1. Replace 'input.jsonl' with the actual path to your JSONL file.
-input_filename = './rawdata/train_formatted.jsonl'
+input_filename = './rawdata/validation_formatted.jsonl'
 
 # 2. Replace 'output.json' with the desired name for your new JSON file.
 output_filename = 'alcIterations/iteration_a_dataset.json'

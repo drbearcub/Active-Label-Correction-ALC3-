@@ -21,7 +21,7 @@ import math
 transformers.logging.set_verbosity_error()
 
 # Constants
-MAX_NEW_DEFAULT = 128  # fallback cap if prompt already near the context window
+MAX_NEW_DEFAULT = 512  # fallback cap if prompt already near the context window
 MAX_EXAMPLES = None  # Set to an int to limit, or None to process all examples
 
 
@@ -137,6 +137,8 @@ def main():
 
     # Load data based on file extension
     data_source = None
+
+    results_list = []
     try:
         with data_path.open('r', encoding='utf-8') as f:
             data_source = json.load(f)
@@ -145,7 +147,6 @@ def main():
             iterable = tqdm(data_source, desc="Generating", unit="example")
             for idx, item in enumerate(iterable):
 
-                print(item)
                 prompt, completion = split_prompt_completion(item)
 
                 try:
@@ -190,8 +191,15 @@ def main():
                 newItem["probabilities"] = probs
                 newItem["forced_probabilities"] = forced_token_probs
 
-                json.dump(newItem, prob_f)
-                prob_f.write("\n")
+                # Instead of writing to file, append to our list
+                results_list.append(newItem)
+
+            # After the loop, write the entire list to the output file as a JSON array
+            print(f"\nWriting {len(results_list)} items to {prob_path}...")
+            with prob_path.open("w", encoding='utf-8') as prob_f:
+                # Use indent for a readable, pretty-printed JSON output
+                json.dump(results_list, prob_f, indent=4)
+            print("Done.")
 
     finally:
         # Ensure the file handle for line-based files is closed
