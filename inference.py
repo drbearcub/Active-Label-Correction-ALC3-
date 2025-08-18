@@ -176,6 +176,10 @@ def main():
                     geo_mean = float("nan")
 
                 forced_token_probs = calculate_forced_probabilities(model, tokenizer, prompt, completion)
+                print("calculating forced token prob " + prompt + " " + completion + "\n");
+                print("result is ")
+                print(forced_token_probs)
+
                 if forced_token_probs:
                     log_probs_forced = [math.log(p) if p > 0 else -float("inf") for p in forced_token_probs]
                     sum_log_forced = sum(log_probs_forced)

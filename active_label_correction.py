@@ -78,11 +78,13 @@ class ALCPipeline:
         prob_output.parent.mkdir(parents=True, exist_ok=True)
         
         # Build command arguments for inference.py
+
+        output = prob_output.parent / f"{prob_output.stem}_step_2_probabilities.json"
         cmd = [
             sys.executable, "inference.py",
             "--model_path", str(model_path),
             "--data_path", str(data_path),
-            "--prob_output_path", str(prob_output),
+            "--prob_output_path", output,
         ]
         
         print(f"Running command: {' '.join(cmd)}")
@@ -90,7 +92,6 @@ class ALCPipeline:
         try:
             # Run without capturing output so we can see logs in real-time
             result = subprocess.run(cmd, check=True)
-            print(f"✓ Inference completed. Results saved to {prob_output}")
             return True
         except subprocess.CalledProcessError as e:
             print(f"❌ Inference failed with return code: {e.returncode}")
@@ -135,9 +136,11 @@ class ALCPipeline:
     def run_sorting(self, prob_output: Path) -> bool:
         """Sort the probability file by confidence metrics."""
         print(f"🔄 Sorting probability file by confidence (iteration {self.current_iteration})...")
-        
-        if not prob_output.exists():
-            print(f"❌ Probability file not found: {prob_output}")
+
+        # Load the geo_mean sorted file
+        prob_file = prob_output.parent / f"{prob_output.stem}_step_2_probabilities.json"
+        if not prob_file.exists():
+            print(f"❌ Sorted file not found: {prob_file}")
             return False
         
         try:
@@ -150,9 +153,9 @@ class ALCPipeline:
             out_dir = prob_output.parent
             
             for metric in metrics:
-                out_path = out_dir / f"{prob_output.stem}_{metric}_sorted.json"
-                self.write_sorted_file(rows, metric, out_path, descending=(metric=="geo_mean"))
-            
+                out_path = out_dir / f"{prob_output.stem}_step_3_geo_mean_sorted.json"
+                self.write_sorted_file(rows, "geo_mean", out_path, descending=False)
+
             print(f"✓ Sorting completed. Sorted files created in {out_dir}")
             return True
             
@@ -167,7 +170,7 @@ class ALCPipeline:
         print(prob_output.stem)
 
         # Load the geo_mean sorted file
-        geo_mean_sorted_file = prob_output.parent / f"{prob_output.stem}_geo_mean_sorted.json"
+        geo_mean_sorted_file = prob_output.parent / f"{prob_output.stem}_step_3_geo_mean_sorted.json"
         if not geo_mean_sorted_file.exists():
             print(f"❌ Sorted file not found: {geo_mean_sorted_file}")
             return False
@@ -178,7 +181,7 @@ class ALCPipeline:
             print(f"✓ Loaded {len(rows)} sorted rows from {geo_mean_sorted_file}")
             
             # Find rows where inference != completion (incorrect predictions)
-            incorrect_rows = [row for row in rows if not row.get('matches_completion', True)]
+            incorrect_rows = [row for row in rows if not row.get('matches_completion', True) and row.get("human_corrected_iteration") is None]
             
             if not incorrect_rows:
                 print("✓ No incorrect predictions found - all inferences match completions!")
@@ -215,7 +218,7 @@ class ALCPipeline:
             assert corrections_made == 1, f"Expected to correct exactly 1 row, but corrected {corrections_made}"
 
             # Save corrected data to new file
-            corrected_file = prob_output.parent / f"{prob_output.stem}_autocorrected.json"
+            corrected_file = prob_output.parent / f"{prob_output.stem}_step_4_autocorrected.json"
             try:
                 with corrected_file.open('w', encoding='utf-8') as f:
                     # Dump the entire sorted list into the file as a JSON array
@@ -238,7 +241,7 @@ class ALCPipeline:
         print(f"🔄 Creating dataset for next iteration (iteration {self.current_iteration})...")
         
         # Always expect human annotated data to exist
-        human_annotated_file = prob_output.parent / f"{prob_output.stem}_human_annotated.json"
+        human_annotated_file = prob_output.parent / f"{prob_output.stem}_step_5_human_annotated.json"
         
         if not human_annotated_file.exists():
             raise FileNotFoundError(f"Human annotated file not found: {human_annotated_file}")
@@ -248,40 +251,13 @@ class ALCPipeline:
         next_dataset = self.alc_dir / f"iteration_{self.current_iteration + 1}_dataset.json"
         shutil.copy(human_annotated_file, next_dataset)
         return next_dataset
-    
-    def rank_autocorrected_by_forced_geo_mean(self, prob_output: Path) -> bool:
-        """Rank the autocorrected file by forced_geo_mean (lowest first)."""
-        print(f"🔄 Ranking autocorrected data by forced_geo_mean (iteration {self.current_iteration})...")
-        
-        # Load the autocorrected file
-        corrected_file = prob_output.parent / f"{prob_output.stem}_autocorrected.json"
-        
-        if not corrected_file.exists():
-            print(f"❌ Autocorrected file not found: {corrected_file}")
-            return False
-        
-        try:
-            # Load autocorrected data
-            rows = self.load_probability_rows(corrected_file)
-            print(f"✓ Loaded {len(rows)} rows from {corrected_file}")
-            
-            # Create ranked file (sorted by forced_geo_mean, lowest first)
-            ranked_file = prob_output.parent / f"{prob_output.stem}_ranked_by_forced_geo_mean.json"
-            self.write_sorted_file(rows, "forced_geo_mean", ranked_file, descending=False)  # ascending order
-            
-            print(f"✓ Ranking completed. Ranked file saved to: {ranked_file}")
-            return True
-            
-        except Exception as e:
-            print(f"❌ Ranking failed: {e}")
-            return False
 
     def run_human_annotation(self, prob_output: Path) -> bool:
         """Perform human annotation using Anthropic API on the 2 lowest forced_geo_mean rows."""
         print(f"🔄 Running human annotation with Anthropic API (iteration {self.current_iteration})...")
         
         # Load the ranked file (sorted by forced_geo_mean, lowest first)
-        ranked_file = prob_output.parent / f"{prob_output.stem}_ranked_by_forced_geo_mean.json"
+        ranked_file = prob_output.parent / f"{prob_output.stem}_step_4_autocorrected.json"
         
         if not ranked_file.exists():
             print(f"❌ Ranked file not found: {ranked_file}")
@@ -306,11 +282,12 @@ class ALCPipeline:
                     print("skipping row as it is human annotated")
                     continue
 
-                if rows_examined == 5:
-                    if should_remove:
-                        row_id_to_remove = row["id"]
-                    print(rows_corrected, "out of ", rows_examined, "are human annotated, removed", row_id_to_remove)
-                    break
+                # Get rid of remove logic for now
+                # if rows_examined == 5:
+                #     if should_remove:
+                #         row_id_to_remove = row["id"]
+                #     print(rows_corrected, "out of ", rows_examined, "are human annotated, removed", row_id_to_remove)
+                #     break
 
                 rows_examined += 1
 
@@ -323,13 +300,13 @@ class ALCPipeline:
                     # Save original and update fields with iteration number
                     row[f'original_completion_{self.current_iteration}'] = row.get('completion.', '')
                     row['completion.'] = corrected_user_query
-                    row[f'human_corrected_{self.current_iteration}'] = True
+                    row[f'human_corrected_iteration'] = self.current_iteration
                     rows_corrected += 1
                     print(f"✓ Human corrected row {row.get('id', 'N/A')}")
                     should_remove = True
 
             # Save human annotated data to new file
-            annotated_file = prob_output.parent / f"{prob_output.stem}_human_annotated.json"
+            annotated_file = prob_output.parent / f"{prob_output.stem}_step_5_human_annotated.json"
             final_rows = [row for row in rows if row.get('id') != row_id_to_remove]
 
             try:
@@ -367,7 +344,7 @@ class ALCPipeline:
         
         # Paths for this iteration
         model_output = self.models_dir / f"iteration_{self.current_iteration}"
-        prob_output = self.alc_dir / f"iteration_{self.current_iteration}_probabilities.json"
+        prob_output = self.alc_dir / f"iteration_{self.current_iteration}.json"
 
         try:
             # Step 1: Run training
@@ -386,15 +363,11 @@ class ALCPipeline:
             if not self.run_auto_correction(prob_output):
                 return None
 
-            # Step 5: Rank autocorrected data by forced_geo_mean (lowest first)
-            if not self.rank_autocorrected_by_forced_geo_mean(prob_output):
-                return None
-
-            # Step 6: Human annotation
+            # Step 5: Human annotation
             if not self.run_human_annotation(prob_output):
                 return None
 
-            # Step 7: Create the dataset for the next iteration
+            # Step 6: Create the dataset for the next iteration
             next_dataset = self.create_next_dataset(prob_output)
             if next_dataset is None:
                 return None
@@ -433,7 +406,6 @@ class ALCPipeline:
         print(f"   - Probability files: iteration_X_probabilities.json")
         print(f"   - Sorted files: iteration_X_probabilities_geo_mean_sorted.json")
         print(f"   - Auto-corrected files: iteration_X_probabilities_autocorrected.json")
-        print(f"   - Ranked files: iteration_X_probabilities_ranked_by_forced_geo_mean.json")
         print(f"   - Human annotated files: iteration_X_probabilities_human_annotated.json")
         print(f"🤖 Models saved in: {self.models_dir}")
 
