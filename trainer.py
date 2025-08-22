@@ -247,6 +247,13 @@ def parse_args():
             "If passed, LLM loading time and RAM consumption will be benefited."
         ),
     )
+    parser.add_argument(
+        "--current_iteration",
+        type=int,
+        default=None,
+        help=("tracks the current iteration, used to decide whether to use inference for training for autocorrected data points"),
+    )
+
 
     args = parser.parse_args()
 
@@ -269,7 +276,7 @@ def parse_args():
 
     return args
 
-def preprocess_for_qa_json(examples, tokenizer, block_size):
+def preprocess_for_qa_json(examples, tokenizer, block_size, current_iteration):
     """
     Preprocesses the JSON data to create masked labels for question-answering fine-tuning.
     The loss will only be calculated on the completion part.
@@ -279,14 +286,41 @@ def preprocess_for_qa_json(examples, tokenizer, block_size):
     eos_id = tokenizer.eos_token_id
 
     outputs = {"input_ids": [], "attention_mask": [], "labels": []}
-    
-    for courseName, userQuery, completion in zip(examples['course_name'], examples['user_query'], examples['completion.']):
+
+    print("example length ")
+    #print("examples 0 is" , examples[0])
+
+    num_examples = len(examples["course_name"])  # length of the batch
+
+    for id, courseName, userQuery, completion, autoCorrectionIterations, inference, geo_mean, forced_geo_mean in zip(
+            examples["id"],
+            examples["course_name"],
+            examples["user_query"],
+            examples["completion."],
+            examples.get("autocorrected_iterations", [[]] * num_examples),
+            examples.get("inference", [None] * num_examples),
+            examples.get("geo_mean", [None] * num_examples),
+            examples.get("forced_geo_mean", [None] * num_examples),
+    ):
         # Combine prompt and completion to create the full text
-        print(courseName, userQuery, completion)
+        print("one example ", "courseName: ", courseName, "userQuery: ", userQuery,"completion: ", completion, "autoCorrectionIterations: ", autoCorrectionIterations, inference, geo_mean, forced_geo_mean)
+
         prompt = courseName + userQuery
-        full_text = prompt + completion
-        
-        print(f"[Processing] {full_text}")
+
+        if autoCorrectionIterations is None:
+            autoCorrectionIterations = []
+
+        if (current_iteration - 1) in autoCorrectionIterations:
+            if geo_mean > forced_geo_mean:
+                print(f"******* [David] at iteration {current_iteration}, auto corrected example, use inference for training for {id} ******")
+                full_text = prompt + inference
+            else:
+                full_text = prompt + completion
+                print(f"***** [David] at iteration {current_iteration}, inference result is worse than original, do not use inference for training for {id} *****")
+        else:
+            full_text = prompt + completion
+
+        print(f"[Processing] {full_text} for {id}")
         
         # Tokenize the full text
         enc = tokenizer(full_text,
@@ -314,7 +348,6 @@ def preprocess_for_qa_json(examples, tokenizer, block_size):
 
 
 def main():
-    print("inside main")
     args = parse_args()
 
     print(args)
@@ -516,7 +549,7 @@ def main():
     # Apply preprocessing that masks labels so loss is only computed on the completion
     with accelerator.main_process_first():
         qa_datasets = raw_datasets.map(
-            lambda examples: preprocess_for_qa_json(examples, tokenizer, block_size),
+            lambda examples: preprocess_for_qa_json(examples, tokenizer, block_size, args.current_iteration),
             batched=True,
             num_proc=args.preprocessing_num_workers,
             remove_columns=raw_datasets["train"].column_names,

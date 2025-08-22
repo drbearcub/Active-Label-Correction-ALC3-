@@ -18,416 +18,317 @@ import json
 import subprocess
 import sys
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import argparse
 import shutil
 
+
 class ALCPipeline:
-    def __init__(self, iterations: int = 5, initial_data: str = "alcIterations/iteration_0_dataset.json"):
+    def __init__(self, iterations: int = 5, initial_data: str = "alcIterations/iteration_0_dataset.json", start_iteration = 0):
         self.iterations = iterations
         self.initial_data = Path(initial_data)
+        self.start_iteration = start_iteration
         self.alc_dir = Path("alcIterations")
         self.models_dir = Path("alcmodels")
+
         self.current_iteration = 0
-        
+
         # Create directories
         self.alc_dir.mkdir(exist_ok=True)
         self.models_dir.mkdir(exist_ok=True)
         Path("results").mkdir(exist_ok=True)  # Ensure results directory exists
 
-    def run_training(self, train_file: Path, output_model: Path) -> bool:
-        """Run the training using command line arguments."""
+    def run_training(self, train_file: Path) -> Optional[Path]:
+        """
+        Run training and return the path to the output model.
+        """
         print(f"🔄 Training model (iteration {self.current_iteration})...")
-        
+
         # Determine base model path
-        if self.current_iteration == 0:
-            base_model = 'openai-community/gpt2'
-        else:
-            prev_model = self.models_dir / f"iteration_{self.current_iteration-1}"
-            base_model = str(prev_model)
-        
-        # Build command arguments for trainer_json.py
+        base_model = 'openai-community/gpt2'
+        if self.current_iteration > 0:
+            prev_model = self.models_dir / f"iteration_{self.current_iteration - 1}"
+            if prev_model.exists():
+                base_model = str(prev_model)
+
+        output_model = self.models_dir / f"iteration_{self.current_iteration}"
+
         cmd = [
             sys.executable, "trainer.py",
             "--model_name_or_path", base_model,
             "--train_file", str(train_file),
-            "--validation_split_percentage", "5", 
+            "--validation_split_percentage", "5",
             "--per_device_train_batch_size", "1",
             "--per_device_eval_batch_size", "1",
             "--num_train_epochs", "3",
             "--output_dir", str(output_model),
             "--gradient_accumulation_steps", "10",
+            "--current_iteration", f"{self.current_iteration}",
         ]
-        
+
         print(f"Running command: {' '.join(cmd)}")
-        
         try:
-            # Run without capturing output so we can see logs in real-time
-            result = subprocess.run(cmd, check=True)
+            subprocess.run(cmd, check=True)
             print(f"✓ Training completed. Model saved to {output_model}")
-            return True
+            return output_model
         except subprocess.CalledProcessError as e:
             print(f"❌ Training failed with return code: {e.returncode}")
-            return False
+            return None
 
-    def run_inference(self, model_path: Path, data_path: Path, prob_output: Path) -> bool:
-        """Run inference using command line arguments."""
+    def run_inference(self, model_path: Path, data_path: Path) -> Optional[Path]:
+        """
+        Run inference and return the path to the probabilities file.
+        """
         print(f"🔄 Running inference (iteration {self.current_iteration})...")
-        
-        # Ensure output directory exists
-        prob_output.parent.mkdir(parents=True, exist_ok=True)
-        
-        # Build command arguments for inference.py
 
-        output = prob_output.parent / f"{prob_output.stem}_step_2_probabilities.json"
+        output_path = self.alc_dir / f"iteration_{self.current_iteration}_step_2_probabilities.json"
+
         cmd = [
             sys.executable, "inference.py",
             "--model_path", str(model_path),
             "--data_path", str(data_path),
-            "--prob_output_path", output,
+            "--prob_output_path", str(output_path),
         ]
-        
+
         print(f"Running command: {' '.join(cmd)}")
-        
         try:
-            # Run without capturing output so we can see logs in real-time
-            result = subprocess.run(cmd, check=True)
-            return True
+            subprocess.run(cmd, check=True)
+            print(f"✓ Inference completed. Probabilities saved to {output_path}")
+            return output_path
         except subprocess.CalledProcessError as e:
             print(f"❌ Inference failed with return code: {e.returncode}")
-            return False
+            return None
 
-    def load_probability_rows(self, json_path: Path) -> List[Dict[str, Any]]:
-        """Load probability data from a JSON array file into a list of dictionaries."""
+    def load_json_rows(self, json_path: Path) -> List[Dict[str, Any]]:
+        """Load data from a JSON array file into a list of dictionaries."""
         try:
             with json_path.open(encoding='utf-8') as f:
-                # Load the entire JSON array from the file
                 data = json.load(f)
-
-            # Ensure the loaded data is a list
             if not isinstance(data, list):
-                print(f"Warning: JSON file '{json_path}' does not contain a list (array).")
+                print(f"⚠️  Warning: JSON file '{json_path}' does not contain a list.")
                 return []
-
             return data
-
         except json.JSONDecodeError as e:
-            print(f"Warning: Failed to decode JSON file '{json_path}': {e}")
+            print(f"❌ Error: Failed to decode JSON from '{json_path}': {e}")
             return []
         except FileNotFoundError:
-            print(f"Error: File not found at '{json_path}'")
+            print(f"❌ Error: File not found at '{json_path}'")
             return []
 
-    def write_sorted_file(self, rows: list, metric: str, out_path: Path, descending: bool = True):
-        """Sorts rows by a given metric and writes them to a JSON array file."""
-
-        sorted_rows = sorted(rows, key=lambda r: r.get(metric, 0), reverse=descending)
-
+    def write_json_rows(self, rows: list, out_path: Path):
+        """Writes rows to a JSON array file with pretty printing."""
         try:
             with out_path.open('w', encoding='utf-8') as f:
-                # Dump the entire sorted list into the file as a JSON array
-                # Using indent=4 makes the output file human-readable
-                json.dump(sorted_rows, f, indent=4)
-            print(f"✓ Successfully wrote {len(sorted_rows)} rows to {out_path}")
-
+                json.dump(rows, f, indent=4)
+            print(f"✓ Successfully wrote {len(rows)} rows to {out_path}")
         except IOError as e:
-            print(f"Error writing to file {out_path}: {e}")
+            print(f"❌ Error writing to file {out_path}: {e}")
 
-    def run_sorting(self, prob_output: Path) -> bool:
-        """Sort the probability file by confidence metrics."""
+    def run_sorting(self, prob_file: Path) -> Optional[Path]:
+        """
+        Sort the probability file by confidence metrics and return the output path.
+        """
         print(f"🔄 Sorting probability file by confidence (iteration {self.current_iteration})...")
 
-        # Load the geo_mean sorted file
-        prob_file = prob_output.parent / f"{prob_output.stem}_step_2_probabilities.json"
-        if not prob_file.exists():
-            print(f"❌ Sorted file not found: {prob_file}")
-            return False
-        
-        try:
-            # Load probability data
-            rows = self.load_probability_rows(prob_output)
-            print(f"✓ Loaded {len(rows)} rows from {prob_output}")
-            
-            # Sort by different metrics
-            metrics = ["geo_mean"]
-            out_dir = prob_output.parent
-            
-            for metric in metrics:
-                out_path = out_dir / f"{prob_output.stem}_step_3_geo_mean_sorted.json"
-                self.write_sorted_file(rows, "geo_mean", out_path, descending=False)
+        rows = self.load_json_rows(prob_file)
+        if not rows:
+            return None
 
-            print(f"✓ Sorting completed. Sorted files created in {out_dir}")
-            return True
-            
-        except Exception as e:
-            print(f"❌ Sorting failed: {e}")
-            return False
-    
-    def run_auto_correction(self, prob_output: Path) -> bool:
-        """Perform auto-correction by finding the most confident incorrect prediction."""
+        # Sort by geo_mean (ascending)
+        sorted_rows = sorted(rows, key=lambda r: r.get("geo_mean", 0), reverse=False)
+
+        output_path = self.alc_dir / f"iteration_{self.current_iteration}_step_3_geo_mean_sorted.json"
+        self.write_json_rows(sorted_rows, output_path)
+
+        print(f"✓ Sorting completed.")
+        return output_path
+
+    def run_auto_correction(self, sorted_file: Path) -> Optional[Path]:
+        """
+        Perform auto-correction and return the path to the corrected file.
+        """
         print(f"🔄 Running auto-correction (iteration {self.current_iteration})...")
 
-        print(prob_output.stem)
+        rows = self.load_json_rows(sorted_file)
+        if not rows:
+            return None
 
-        # Load the geo_mean sorted file
-        geo_mean_sorted_file = prob_output.parent / f"{prob_output.stem}_step_3_geo_mean_sorted.json"
-        if not geo_mean_sorted_file.exists():
-            print(f"❌ Sorted file not found: {geo_mean_sorted_file}")
-            return False
-        
-        try:
-            # Load sorted probability data
-            rows = self.load_probability_rows(geo_mean_sorted_file)
-            print(f"✓ Loaded {len(rows)} sorted rows from {geo_mean_sorted_file}")
-            
-            # Find rows where inference != completion (incorrect predictions)
-            incorrect_rows = [row for row in rows if not row.get('matches_completion', True) and row.get("human_corrected_iteration") is None]
-            
-            if not incorrect_rows:
-                print("✓ No incorrect predictions found - all inferences match completions!")
-                return True
-            
-            print(f"📊 Found {len(incorrect_rows)} incorrect predictions out of {len(rows)} total")
-            
-            # ALC Strategy: Only correct 1 row per iteration for gradual, controlled improvement
-            # The file is already sorted by geo_mean (descending), so the first incorrect row
-            # has the highest confidence among incorrect predictions
-            most_confident_incorrect = incorrect_rows[0]
-            
-            print(f"🎯 Most confident incorrect prediction (correcting only 1 per iteration):")
-            print(f"   Row ID: {most_confident_incorrect.get('id', 'N/A')}")
-            print(f"   Geo Mean: {most_confident_incorrect.get('geo_mean', 'N/A'):.6f}")
-            print(f"   Original completion: {most_confident_incorrect.get('completion.', '')[:100]}...")
-            print(f"   Model inference: {most_confident_incorrect.get('inference', '')[:100]}...")
-            
-            # Create corrected dataset by updating ONLY the most confident incorrect prediction
-            corrections_made = 0
-            target_row_id = most_confident_incorrect.get('id')
-            
-            for row in rows:
-                # Correct only the single most confident incorrect prediction
-                if row.get('id') == target_row_id and corrections_made == 0:
-                    row[f'original_completion_{self.current_iteration}'] = row['completion.']  # Save original with iteration
-                    row['completion.'] = row['inference']                                        # Replace completion with inference
-                    row[f'autocorrected_{self.current_iteration}'] = True                       # Mark as auto-corrected with iteration
-                    corrections_made += 1
-                    print(f"✓ Corrected row {row.get('id', 'N/A')}: completion updated to match inference (original saved)")
-                # No else clause - don't add autocorrected: false to unchanged rows
+        incorrect_rows = [row for row in rows if
+                          not row.get('matches_completion', True) and row.get("human_corrected_iteration") is None] #[david] do not touch human corrected record
 
-            # Verify we only corrected exactly 1 row
-            assert corrections_made == 1, f"Expected to correct exactly 1 row, but corrected {corrections_made}"
+        if not incorrect_rows:
+            print("✓ No incorrect predictions found to auto-correct.")
+            # If no corrections, the next step just uses the same data
+            output_path = self.alc_dir / f"iteration_{self.current_iteration}_step_4_autocorrected.json"
+            shutil.copy(sorted_file, output_path)
+            return output_path
 
-            # Save corrected data to new file
-            corrected_file = prob_output.parent / f"{prob_output.stem}_step_4_autocorrected.json"
-            try:
-                with corrected_file.open('w', encoding='utf-8') as f:
-                    # Dump the entire sorted list into the file as a JSON array
-                    # Using indent=4 makes the output file human-readable
-                    json.dump(rows, f, indent=4)
+        print(f"📊 Found {len(incorrect_rows)} incorrect predictions.")
 
-            except IOError as e:
-                print(f"Error writing to file {corrected_file}: {e}")
+        # ALC Strategy: Correct only the most confident incorrect prediction.
+        # The file is sorted by geo_mean (ascending), so we find the first incorrect row.
+        most_confident_incorrect = incorrect_rows[0]
+        target_row_id = most_confident_incorrect.get('id')
 
-            print(f"✓ Auto-correction completed: {corrections_made} correction(s) made")
-            print(f"✓ Corrected data saved to: {corrected_file}")
-            return True
-            
-        except Exception as e:
-            print(f"❌ Auto-correction failed: {e}")
-            return False
-    
-    def create_next_dataset(self, prob_output: Path) -> Path:
-        """Create the text dataset for the next iteration using human annotated data."""
-        print(f"🔄 Creating dataset for next iteration (iteration {self.current_iteration})...")
-        
-        # Always expect human annotated data to exist
-        human_annotated_file = prob_output.parent / f"{prob_output.stem}_step_5_human_annotated.json"
-        
-        if not human_annotated_file.exists():
-            raise FileNotFoundError(f"Human annotated file not found: {human_annotated_file}")
-        
-        corrected_file = human_annotated_file
-        print(f"✓ Using human annotated data: {corrected_file}")
-        next_dataset = self.alc_dir / f"iteration_{self.current_iteration + 1}_dataset.json"
-        shutil.copy(human_annotated_file, next_dataset)
-        return next_dataset
+        print(f"🎯 Correcting row {target_row_id} (Geo Mean: {most_confident_incorrect.get('geo_mean', 'N/A'):.6f})")
 
-    def run_human_annotation(self, prob_output: Path) -> bool:
-        """Perform human annotation using Anthropic API on the 2 lowest forced_geo_mean rows."""
-        print(f"🔄 Running human annotation with Anthropic API (iteration {self.current_iteration})...")
-        
-        # Load the ranked file (sorted by forced_geo_mean, lowest first)
-        ranked_file = prob_output.parent / f"{prob_output.stem}_step_4_autocorrected.json"
-        
-        if not ranked_file.exists():
-            print(f"❌ Ranked file not found: {ranked_file}")
-            return False
-        
-        try:
-            # Load ranked data
-            rows = self.load_probability_rows(ranked_file)
-            print(f"✓ Loaded {len(rows)} rows from {ranked_file}")
-            
-            if len(rows) < 2:
-                print("⚠️  Warning: Less than 2 rows available for human annotation")
-                return True
+        corrections_made = 0
+        for row in rows:
+            if row.get('id') == target_row_id:
+                row[f'original_completion_{self.current_iteration}'] = row.get('completion.', '')
+                row['completion.'] = row.get('inference', row.get('completion.', ''))
+                row.setdefault("autocorrected_iterations", []).append(self.current_iteration)
+                corrections_made += 1
+                break  # Stop after correcting the first one
 
-            rows_examined = 0
-            rows_corrected = 0
-            row_id_to_remove = ''
-            should_remove = False
+        output_path = self.alc_dir / f"iteration_{self.current_iteration}_step_4_autocorrected.json"
+        self.write_json_rows(rows, output_path)
 
-            for index, row in enumerate(rows):
-                if row.get(f"autocorrected_{self.current_iteration}", False):
-                    print("skipping row as it is human annotated")
-                    continue
+        print(f"✓ Auto-correction completed.")
+        return output_path
 
-                # Get rid of remove logic for now
-                # if rows_examined == 5:
-                #     if should_remove:
-                #         row_id_to_remove = row["id"]
-                #     print(rows_corrected, "out of ", rows_examined, "are human annotated, removed", row_id_to_remove)
-                #     break
-
-                rows_examined += 1
-
-                # Get correction from Anthropic (pass full prompt, get back corrected UserQuery)
-                corrected_user_query = row.get('human_annotation')
-                print("corrected_user_query: ", corrected_user_query)
-                # Extract the original user query to compare
-
-                if corrected_user_query != row.get('completion.', ''):
-                    # Save original and update fields with iteration number
-                    row[f'original_completion_{self.current_iteration}'] = row.get('completion.', '')
-                    row['completion.'] = corrected_user_query
-                    row[f'human_corrected_iteration'] = self.current_iteration
-                    rows_corrected += 1
-                    print(f"✓ Human corrected row {row.get('id', 'N/A')}")
-                    should_remove = True
-
-            # Save human annotated data to new file
-            annotated_file = prob_output.parent / f"{prob_output.stem}_step_5_human_annotated.json"
-            final_rows = [row for row in rows if row.get('id') != row_id_to_remove]
-
-            try:
-                with annotated_file.open('w', encoding='utf-8') as f:
-                    # Dump the entire sorted list into the file as a JSON array
-                    # Using indent=4 makes the output file human-readable
-                    json.dump(final_rows, f, indent=4)
-
-            except IOError as e:
-                print(f"Error writing to file {annotated_file}: {e}")
-
-            print(f"✓ Human annotated data saved to: {annotated_file}")
-            return True
-            
-        except Exception as e:
-            print(f"❌ Human annotation failed: {e}")
-            return False
-    
-    def run_iteration(self, current_dataset: Path) -> Path:
-        """Run a single ALC iteration.
-        
-        This will create:
-        - Model: alcmodels/iteration_X/
-        - Probabilities: alcIterations/iteration_X_probabilities.json
-        - Sorted files: alcIterations/iteration_X_probabilities_geo_mean_sorted.json
-                       alcIterations/iteration_X_probabilities_forced_geo_mean_sorted.json
-        - Auto-corrected: alcIterations/iteration_X_probabilities_autocorrected.json
-        - Ranked by forced_geo_mean: alcIterations/iteration_X_probabilities_ranked_by_forced_geo_mean.json
-        - Human annotated: alcIterations/iteration_X_probabilities_human_annotated.json
-        - Next dataset: alcIterations/iteration_{X+1}_dataset.json
+    def run_human_annotation(self, autocorrected_file: Path) -> Optional[Path]:
         """
-        print(f"\n{'='*50}")
-        print(f"Starting ALC Iteration {self.current_iteration}")
-        print(f"{'='*50}")
-        
-        # Paths for this iteration
-        model_output = self.models_dir / f"iteration_{self.current_iteration}"
-        prob_output = self.alc_dir / f"iteration_{self.current_iteration}.json"
+        Perform human annotation and return the path to the annotated file.
+        """
+        print(f"🔄 Running human annotation (iteration {self.current_iteration})...")
+
+        rows = self.load_json_rows(autocorrected_file)
+        if not rows:
+            return None
+
+        rows_corrected = 0
+        # Iterate through rows to find and apply human annotations
+        for row in rows:
+            # Skip rows that were just auto-corrected in this same iteration
+            if row.get(f"autocorrected_iteration_{self.current_iteration}", False):
+                continue
+
+            # Check if an external human annotation has been provided
+            corrected_user_query = row.get('human_annotation')
+            if corrected_user_query and corrected_user_query != row.get('completion.', ''):
+                row[f'original_completion_{self.current_iteration}'] = row.get('completion.', '')
+                row['completion.'] = corrected_user_query
+                row[f'human_corrected_iteration'] = self.current_iteration
+                rows_corrected += 1
+                print(f"✓ Applied human correction to row {row.get('id', 'N/A')}")
+
+        print(f"✓ Total human corrections applied: {rows_corrected}")
+
+        output_path = self.alc_dir / f"iteration_{self.current_iteration}_step_5_human_annotated.json"
+        self.write_json_rows(rows, output_path)
+
+        print(f"✓ Human annotation step completed.")
+        return output_path
+
+    def create_next_dataset(self, annotated_file: Path) -> Optional[Path]:
+        """
+        Create the dataset for the next iteration and return its path.
+        """
+        print(f"🔄 Creating dataset for next iteration...")
+
+        if not annotated_file.exists():
+            print(f"❌ Annotated file not found: {annotated_file}")
+            return None
+
+        next_dataset_path = self.alc_dir / f"iteration_{self.current_iteration + 1}_dataset.json"
+        shutil.copy(annotated_file, next_dataset_path)
+
+        print(f"✓ Next dataset created at: {next_dataset_path}")
+        return next_dataset_path
+
+    def run_iteration(self, current_dataset: Path) -> Optional[Path]:
+        """
+        Run a single, complete ALC iteration.
+        """
+        print(f"\n{'=' * 50}\n🚀 Starting ALC Iteration {self.current_iteration}\n{'=' * 50}")
 
         try:
-            # Step 1: Run training
-            if not self.run_training(current_dataset, model_output):
-                return None
+            # Step 1: Train model
+            model_path = self.run_training(current_dataset)
+            if not model_path: return None
 
             # Step 2: Run inference
-            if not self.run_inference(model_output, current_dataset, prob_output):
-                return None
+            prob_file = self.run_inference(model_path, current_dataset)
+            if not prob_file: return None
 
-            # Step 3: Sort probability file by confidence
-            if not self.run_sorting(prob_output):
-                return None
+            # Step 3: Sort results
+            sorted_file = self.run_sorting(prob_file)
+            if not sorted_file: return None
 
-            # Step 4: Auto-correct the most confident incorrect prediction
-            if not self.run_auto_correction(prob_output):
-                return None
+            # Step 4: Auto-correct most confident error
+            autocorrected_file = self.run_auto_correction(sorted_file)
+            if not autocorrected_file: return None
 
-            # Step 5: Human annotation
-            if not self.run_human_annotation(prob_output):
-                return None
+            # Step 5: Apply human annotations
+            human_annotated_file = self.run_human_annotation(autocorrected_file)
+            if not human_annotated_file: return None
 
-            # Step 6: Create the dataset for the next iteration
-            next_dataset = self.create_next_dataset(prob_output)
-            if next_dataset is None:
-                return None
-            
+            # Step 6: Create dataset for the next iteration
+            next_dataset = self.create_next_dataset(human_annotated_file)
+            if not next_dataset: return None
+
             print(f"✅ Iteration {self.current_iteration} completed successfully!")
-            return next_dataset  # Return the corrected dataset for next iteration
-            
+            return next_dataset
+
         except Exception as e:
-            print(f"❌ Iteration {self.current_iteration} failed: {e}")
+            print(f"❌ Iteration {self.current_iteration} failed with an unexpected error: {e}")
             return None
-    
+
     def run_pipeline(self):
-        """Run the complete ALC pipeline."""
+        """Run the complete ALC pipeline for the specified number of iterations."""
         print("🚀 Starting Active Label Correction Pipeline")
         print(f"📊 Running {self.iterations} iterations")
-        
-        # Setup initial dataset
-        current_dataset = "alcIterations/iteration_0_dataset.json"
-        
 
-        for i in range(self.iterations):
-            print(f"Current dataset is: {current_dataset}")
+        current_dataset = self.initial_data
+        if not current_dataset.exists():
+            print(f"❌ Initial dataset not found at {self.initial_data}. Aborting.")
+            return
+
+        for i in range(self.start_iteration, self.iterations):
             self.current_iteration = i
             next_dataset = self.run_iteration(current_dataset)
-            
+
             if next_dataset is None:
-                print(f"⚠️  Pipeline stopped at iteration {i} due to failure")
+                print(f"⚠️  Pipeline stopped at iteration {i} due to a failure.")
                 break
-            
+
             current_dataset = next_dataset
-            print(current_dataset)
-        
-        print(f"\n🎉 ALC Pipeline completed!")
-        print(f"📁 Results saved in: {self.alc_dir}")
-        print(f"   - Dataset files: iteration_X_dataset.json")
-        print(f"   - Probability files: iteration_X_probabilities.json")
-        print(f"   - Sorted files: iteration_X_probabilities_geo_mean_sorted.json")
-        print(f"   - Auto-corrected files: iteration_X_probabilities_autocorrected.json")
-        print(f"   - Human annotated files: iteration_X_probabilities_human_annotated.json")
-        print(f"🤖 Models saved in: {self.models_dir}")
+
+        print(f"\n🎉 ALC Pipeline finished!")
+        print(f"📁 Final outputs are in: {self.alc_dir}")
+        print(f"🤖 Final model is in: {self.models_dir / f'iteration_{self.current_iteration}'}")
+
 
 def main():
     parser = argparse.ArgumentParser(description="Active Label Correction Pipeline")
     parser.add_argument(
-        "--iterations", 
-        type=int, 
-        default=5, 
+        "--iterations",
+        type=int,
+        default=5,
         help="Number of ALC iterations to run"
     )
     parser.add_argument(
-        "--initial_data", 
-        type=str, 
-        default="alcIterations/iteration_0_dataset.json", 
-        help="Path to initial dataset"
+        "--initial_data",
+        type=str,
+        default="alcIterations/iteration_0_dataset.json",
+        help="Path to the initial dataset"
     )
-    
+    parser.add_argument(
+        "--start_iteration",
+        type=int,
+        default=0,
+        help="Iteration number to start from (default: 0)"
+    )
+
+
     args = parser.parse_args()
-    
-    # Run the pipeline
-    pipeline = ALCPipeline(iterations=args.iterations, initial_data=args.initial_data)
+
+    pipeline = ALCPipeline(
+        iterations=args.iterations,
+        initial_data=args.initial_data,
+        start_iteration=args.start_iteration
+    )
     pipeline.run_pipeline()
 
 
