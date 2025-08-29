@@ -287,28 +287,35 @@ def preprocess_for_qa_json(examples, tokenizer, block_size, current_iteration):
 
     outputs = {"input_ids": [], "attention_mask": [], "labels": []}
 
-    print("example length ")
     #print("examples 0 is" , examples[0])
 
     num_examples = len(examples["course_name"])  # length of the batch
 
-    for id, courseName, userQuery, completion, autoCorrectionIterations, inference, geo_mean, forced_geo_mean in zip(
+    for id, courseName, userQuery, completion, autoCorrectionIterations, filteredIterations, inference, geo_mean, forced_geo_mean in zip(
             examples["id"],
             examples["course_name"],
             examples["user_query"],
             examples["completion."],
             examples.get("autocorrected_iterations", [[]] * num_examples),
+            examples.get("filtered_iterations", [[]] * num_examples),
             examples.get("inference", [None] * num_examples),
             examples.get("geo_mean", [None] * num_examples),
             examples.get("forced_geo_mean", [None] * num_examples),
     ):
         # Combine prompt and completion to create the full text
-        print("one example ", "courseName: ", courseName, "userQuery: ", userQuery,"completion: ", completion, "autoCorrectionIterations: ", autoCorrectionIterations, inference, geo_mean, forced_geo_mean)
+        # print("one example ", "courseName: ", courseName, "userQuery: ", userQuery,"completion: ", completion, "autoCorrectionIterations: ", autoCorrectionIterations, inference, geo_mean, forced_geo_mean)
 
         prompt = courseName + userQuery
 
         if autoCorrectionIterations is None:
             autoCorrectionIterations = []
+
+        if filteredIterations is None:
+            filteredIterations = []
+
+        if (current_iteration - 1) in filteredIterations:
+            print(f"******* [David] at iteration {current_iteration}, filtered example, skipping  {id} ******")
+            continue
 
         if (current_iteration - 1) in autoCorrectionIterations:
             if geo_mean > forced_geo_mean:
@@ -320,7 +327,7 @@ def preprocess_for_qa_json(examples, tokenizer, block_size, current_iteration):
         else:
             full_text = prompt + completion
 
-        print(f"[Processing] {full_text} for {id}")
+        #print(f"[Processing] {full_text} for {id}")
         
         # Tokenize the full text
         enc = tokenizer(full_text,
@@ -423,7 +430,6 @@ def main():
         raw_datasets = load_dataset(
             args.dataset_name, args.dataset_config_name, trust_remote_code=args.trust_remote_code
         )
-        print("[david] loaded dataset?")
         if "validation" not in raw_datasets.keys():
             raw_datasets["validation"] = load_dataset(
                 args.dataset_name,

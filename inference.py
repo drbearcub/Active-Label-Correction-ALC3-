@@ -155,14 +155,14 @@ def main():
                     print(f"Error generating answer for item {idx}: {e}")
                     continue
 
-                print("PROMPT:", prompt)
-                print("COMPLETION:", completion)
-                print("ANSWER:", answer)
+                # print("PROMPT:", prompt)
+                # print("COMPLETION:", completion)
+                # print("ANSWER:", answer)
 
                 # Check if generated answer matches original completion
                 matches_completion = answer == completion
-                print("MATCHES COMPLETION:", matches_completion)
-                print("=" * 80)
+                # print("MATCHES COMPLETION:", matches_completion)
+                # print("=" * 80)
 
                 # Aggregate probability statistics for inference
                 probs = [info["prob"] for info in token_details]
@@ -176,9 +176,9 @@ def main():
                     geo_mean = float("nan")
 
                 forced_token_probs = calculate_forced_probabilities(model, tokenizer, prompt, completion)
-                print("calculating forced token prob " + prompt + " " + completion + "\n");
-                print("result is ")
-                print(forced_token_probs)
+                # print("calculating forced token prob " + prompt + " " + completion + "\n");
+                # print("result is ")
+                # print(forced_token_probs)
 
                 if forced_token_probs:
                     log_probs_forced = [math.log(p) if p > 0 else -float("inf") for p in forced_token_probs]
@@ -186,6 +186,8 @@ def main():
                     avg_log_prob_forced = sum_log_forced / len(log_probs_forced)
                     geo_mean_forced = math.exp(avg_log_prob_forced)
 
+
+                #print("old item ", item)
                 # Save probabilities for each generated token
                 newItem = item
                 newItem["inference"] = answer
@@ -196,6 +198,8 @@ def main():
                 newItem["forced_probabilities"] = forced_token_probs
 
                 # Instead of writing to file, append to our list
+
+                #print("new item ", item)
                 results_list.append(newItem)
 
             # After the loop, write the entire list to the output file as a JSON array

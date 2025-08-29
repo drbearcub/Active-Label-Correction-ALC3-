@@ -153,33 +153,28 @@ class ALCPipeline:
         if not rows:
             return None
 
-        incorrect_rows = [row for row in rows if
-                          not row.get('matches_completion', True) and row.get("human_corrected_iteration") is None] #[david] do not touch human corrected record
-
-        if not incorrect_rows:
-            print("✓ No incorrect predictions found to auto-correct.")
-            # If no corrections, the next step just uses the same data
-            output_path = self.alc_dir / f"iteration_{self.current_iteration}_step_4_autocorrected.json"
-            shutil.copy(sorted_file, output_path)
-            return output_path
-
-        print(f"📊 Found {len(incorrect_rows)} incorrect predictions.")
-
+        rows_corrected = 0
+        # Iterate through rows to find and apply human annotations
         # ALC Strategy: Correct only the most confident incorrect prediction.
         # The file is sorted by geo_mean (ascending), so we find the first incorrect row.
-        most_confident_incorrect = incorrect_rows[0]
-        target_row_id = most_confident_incorrect.get('id')
-
-        print(f"🎯 Correcting row {target_row_id} (Geo Mean: {most_confident_incorrect.get('geo_mean', 'N/A'):.6f})")
-
-        corrections_made = 0
         for row in rows:
-            if row.get('id') == target_row_id:
-                row[f'original_completion_{self.current_iteration}'] = row.get('completion.', '')
-                row['completion.'] = row.get('inference', row.get('completion.', ''))
-                row.setdefault("autocorrected_iterations", []).append(self.current_iteration)
-                corrections_made += 1
-                break  # Stop after correcting the first one
+            matchesCompletion = row.get('matches_completion')
+            humanCorrected = row.get('human_corrected_iteration')
+
+            if matchesCompletion:
+                print("Skip auto correct because inference matches completion")
+                continue
+
+            if humanCorrected is not None:
+                print("Skip auto correct because it is already human annotated")
+                continue
+
+            if "autocorrected_iterations" not in row:
+                row["autocorrected_iterations"] = []
+
+            row["autocorrected_iterations"].append(self.current_iteration)
+            rows_corrected += 1
+            break  # Stop after correcting the first one
 
         output_path = self.alc_dir / f"iteration_{self.current_iteration}_step_4_autocorrected.json"
         self.write_json_rows(rows, output_path)
@@ -201,7 +196,15 @@ class ALCPipeline:
         # Iterate through rows to find and apply human annotations
         for row in rows:
             # Skip rows that were just auto-corrected in this same iteration
-            if row.get(f"autocorrected_iteration_{self.current_iteration}", False):
+            auto_corrected_history = row.get("autocorrected_iterations")
+            humanCorrected = row.get('human_corrected_iteration')
+
+            if auto_corrected_history is not None and self.current_iteration in auto_corrected_history:
+                print("Skip human annotation for rows that were just auto-corrected in this same iteration")
+                continue
+
+            if humanCorrected is not None:
+                print("Skip human annotation because it is already human annotated")
                 continue
 
             # Check if an external human annotation has been provided
@@ -212,6 +215,7 @@ class ALCPipeline:
                 row[f'human_corrected_iteration'] = self.current_iteration
                 rows_corrected += 1
                 print(f"✓ Applied human correction to row {row.get('id', 'N/A')}")
+                break
 
         print(f"✓ Total human corrections applied: {rows_corrected}")
 
@@ -219,20 +223,62 @@ class ALCPipeline:
         self.write_json_rows(rows, output_path)
 
         print(f"✓ Human annotation step completed.")
+        print(f"✓ Human annotation step completed.")
         return output_path
 
-    def create_next_dataset(self, annotated_file: Path) -> Optional[Path]:
+    def run_filter(self, human_corrected_file: Path) -> Optional[Path]:
+        """
+        Perform filter and save file to filtered file.
+        """
+        print(f"🔄 Running filter (iteration {self.current_iteration})...")
+
+        rows = self.load_json_rows(human_corrected_file)
+        if not rows:
+            return None
+
+        rows_filtered = 0
+        # Iterate through rows to find and apply filter
+        for row in rows:
+            if rows_filtered == 2 :
+                break
+            # Skip rows that were just auto-corrected in this same iteration
+            auto_corrected_history = row.get("autocorrected_iterations")
+            humanCorrected = row.get('human_corrected_iteration')
+
+            if auto_corrected_history is not None and self.current_iteration in auto_corrected_history:
+                print("Skip human annotation for rows that were just auto-corrected in this same iteration")
+                continue
+
+            if humanCorrected is not None:
+                print("Skip human annotation because it is already human annotated")
+                continue
+
+            if "filtered_iterations" not in row:
+                row["filtered_iterations"] = []
+
+            row["filtered_iterations"].append(self.current_iteration)
+            rows_filtered = rows_filtered + 1
+
+        print(f"✓ Total human corrections applied: {rows_filtered}")
+
+        output_path = self.alc_dir / f"iteration_{self.current_iteration}_step_6_filtered.json"
+        self.write_json_rows(rows, output_path)
+
+        print(f"✓ filter step completed.")
+        return output_path
+
+    def create_next_dataset(self, filtered_file: Path) -> Optional[Path]:
         """
         Create the dataset for the next iteration and return its path.
         """
         print(f"🔄 Creating dataset for next iteration...")
 
-        if not annotated_file.exists():
-            print(f"❌ Annotated file not found: {annotated_file}")
+        if not filtered_file.exists():
+            print(f"❌ Annotated file not found: {filtered_file}")
             return None
 
         next_dataset_path = self.alc_dir / f"iteration_{self.current_iteration + 1}_dataset.json"
-        shutil.copy(annotated_file, next_dataset_path)
+        shutil.copy(filtered_file, next_dataset_path)
 
         print(f"✓ Next dataset created at: {next_dataset_path}")
         return next_dataset_path
@@ -264,8 +310,12 @@ class ALCPipeline:
             human_annotated_file = self.run_human_annotation(autocorrected_file)
             if not human_annotated_file: return None
 
-            # Step 6: Create dataset for the next iteration
-            next_dataset = self.create_next_dataset(human_annotated_file)
+            # Step 6: Apply filter for next iteration
+            filtered_file = self.run_filter(human_annotated_file)
+            if not filtered_file: return None
+
+            # Step 7: Create dataset for the next iteration
+            next_dataset = self.create_next_dataset(filtered_file)
             if not next_dataset: return None
 
             print(f"✅ Iteration {self.current_iteration} completed successfully!")
