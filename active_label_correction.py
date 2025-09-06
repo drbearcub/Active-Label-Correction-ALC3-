@@ -46,10 +46,12 @@ class ALCPipeline:
 
         # Determine base model path
         base_model = 'openai-community/gpt2'
-        if self.current_iteration > 0:
-            prev_model = self.models_dir / f"iteration_{self.current_iteration - 1}"
-            if prev_model.exists():
-                base_model = str(prev_model)
+
+        # do not retrain previously trained model. always use the same gpt2 model
+        # if self.current_iteration > 0:
+        #     prev_model = self.models_dir / f"iteration_{self.current_iteration - 1}"
+        #     if prev_model.exists():
+        #         base_model = str(prev_model)
 
         output_model = self.models_dir / f"iteration_{self.current_iteration}"
 
@@ -134,10 +136,29 @@ class ALCPipeline:
         if not rows:
             return None
 
-        # Sort by geo_mean (ascending)
-        sorted_rows = sorted(rows, key=lambda r: r.get("geo_mean", 0), reverse=False)
+        # Sort by geo_mean (desc)
+        sorted_rows = sorted(rows, key=lambda r: r.get("geo_mean", 0), reverse=True)
 
         output_path = self.alc_dir / f"iteration_{self.current_iteration}_step_3_geo_mean_sorted.json"
+        self.write_json_rows(sorted_rows, output_path)
+
+        print(f"✓ Sorting completed.")
+        return output_path
+
+    def run_sorting_by_forced(self, prob_file: Path) -> Optional[Path]:
+        """
+        Sort the probability file by confidence metrics and return the output path.
+        """
+        print(f"🔄 Sorting probability file by confidence (iteration {self.current_iteration})...")
+
+        rows = self.load_json_rows(prob_file)
+        if not rows:
+            return None
+
+        # Sort by forced geo_mean (asc)
+        sorted_rows = sorted(rows, key=lambda r: r.get("forced_geo_mean", 0), reverse=False)
+
+        output_path = self.alc_dir / f"iteration_{self.current_iteration}_step_5_forced_geo_mean_sorted.json"
         self.write_json_rows(sorted_rows, output_path)
 
         print(f"✓ Sorting completed.")
@@ -155,15 +176,13 @@ class ALCPipeline:
 
         rows_corrected = 0
         # Iterate through rows to find and apply human annotations
-        # ALC Strategy: Correct only the most confident incorrect prediction.
-        # The file is sorted by geo_mean (ascending), so we find the first incorrect row.
+        # ALC Strategy: For the most confident model prediction, use them for training instead of the original completion.
         for row in rows:
-            matchesCompletion = row.get('matches_completion')
-            humanCorrected = row.get('human_corrected_iteration')
+            geo_mean = row.get("geo_mean", 0)
+            if geo_mean <= 0.998229: # hardcoded delta value. only auto-correct if model is really confident.
+                break
 
-            if matchesCompletion:
-                print("Skip auto correct because inference matches completion")
-                continue
+            humanCorrected = row.get('human_corrected_iteration')
 
             if humanCorrected is not None:
                 print("Skip auto correct because it is already human annotated")
@@ -174,7 +193,6 @@ class ALCPipeline:
 
             row["autocorrected_iterations"].append(self.current_iteration)
             rows_corrected += 1
-            break  # Stop after correcting the first one
 
         output_path = self.alc_dir / f"iteration_{self.current_iteration}_step_4_autocorrected.json"
         self.write_json_rows(rows, output_path)
@@ -215,11 +233,13 @@ class ALCPipeline:
                 row[f'human_corrected_iteration'] = self.current_iteration
                 rows_corrected += 1
                 print(f"✓ Applied human correction to row {row.get('id', 'N/A')}")
+
+            if rows_corrected == 2:
                 break
 
         print(f"✓ Total human corrections applied: {rows_corrected}")
 
-        output_path = self.alc_dir / f"iteration_{self.current_iteration}_step_5_human_annotated.json"
+        output_path = self.alc_dir / f"iteration_{self.current_iteration}_step_6_human_annotated.json"
         self.write_json_rows(rows, output_path)
 
         print(f"✓ Human annotation step completed.")
@@ -261,7 +281,7 @@ class ALCPipeline:
 
         print(f"✓ Total human corrections applied: {rows_filtered}")
 
-        output_path = self.alc_dir / f"iteration_{self.current_iteration}_step_6_filtered.json"
+        output_path = self.alc_dir / f"iteration_{self.current_iteration}_step_7_filtered.json"
         self.write_json_rows(rows, output_path)
 
         print(f"✓ filter step completed.")
@@ -306,15 +326,19 @@ class ALCPipeline:
             autocorrected_file = self.run_auto_correction(sorted_file)
             if not autocorrected_file: return None
 
-            # Step 5: Apply human annotations
-            human_annotated_file = self.run_human_annotation(autocorrected_file)
+            # Step 5: Sort again by forced geo mean, ascending
+            sorted_file_forced_geomean = self.run_sorting_by_forced(autocorrected_file)
+            if not sorted_file_forced_geomean: return None
+
+            # Step 6: Apply human annotations
+            human_annotated_file = self.run_human_annotation(sorted_file_forced_geomean)
             if not human_annotated_file: return None
 
-            # Step 6: Apply filter for next iteration
+            # Step 7: Apply filter for next iteration
             filtered_file = self.run_filter(human_annotated_file)
             if not filtered_file: return None
 
-            # Step 7: Create dataset for the next iteration
+            # Step 8: Create dataset for the next iteration
             next_dataset = self.create_next_dataset(filtered_file)
             if not next_dataset: return None
 
