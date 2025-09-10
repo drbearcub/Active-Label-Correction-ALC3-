@@ -12,6 +12,8 @@ from tqdm import tqdm
 from typing import Union
 
 from probability_utils import calculate_forced_probabilities
+from probability_utils import calculate_forced_probabilities_stepwise
+
 import transformers
 from transformers import pipeline, AutoModelForCausalLM, AutoTokenizer
 import torch
@@ -110,7 +112,7 @@ def generate_answer(prompt: str, model, tokenizer):
             {
                 "token": tokenizer.convert_ids_to_tokens(int(token_id)),
                 "prob": token_prob,
-                "top5": top5,
+                #"top5": top5,
             }
         )
 
@@ -155,14 +157,14 @@ def main():
                     print(f"Error generating answer for item {idx}: {e}")
                     continue
 
-                # print("PROMPT:", prompt)
-                # print("COMPLETION:", completion)
-                # print("ANSWER:", answer)
+                print("PROMPT:", prompt)
+                print("COMPLETION:", completion)
+                print("ANSWER:", answer)
 
                 # Check if generated answer matches original completion
                 matches_completion = answer == completion
-                # print("MATCHES COMPLETION:", matches_completion)
-                # print("=" * 80)
+                print("MATCHES COMPLETION:", matches_completion)
+                print("=" * 80)
 
                 # Aggregate probability statistics for inference
                 probs = [info["prob"] for info in token_details]
@@ -175,17 +177,22 @@ def main():
                     avg_log_prob = float("nan")
                     geo_mean = float("nan")
 
-                forced_token_probs = calculate_forced_probabilities(model, tokenizer, prompt, completion)
-                # print("calculating forced token prob " + prompt + " " + completion + "\n");
-                # print("result is ")
-                # print(forced_token_probs)
+                # Calculate probabilities for the forced completion (stepwise)
+                forced_token_probs_details = calculate_forced_probabilities_stepwise(model, tokenizer, prompt, completion)
+                
+                # Extract the probability values to satisfy the provided calculation
+                forced_token_probs = [info["probability"] for info in forced_token_probs_details]
 
                 if forced_token_probs:
                     log_probs_forced = [math.log(p) if p > 0 else -float("inf") for p in forced_token_probs]
                     sum_log_forced = sum(log_probs_forced)
                     avg_log_prob_forced = sum_log_forced / len(log_probs_forced)
                     geo_mean_forced = math.exp(avg_log_prob_forced)
+                else:
+                    avg_log_prob_forced = float("nan")
+                    geo_mean_forced = float("nan")
 
+                #print("forced token probs ", forced_token_probs_details)
 
                 #print("old item ", item)
                 # Save probabilities for each generated token
@@ -196,6 +203,15 @@ def main():
                 newItem["forced_geo_mean"] = geo_mean_forced
                 newItem["probabilities"] = probs
                 newItem["forced_probabilities"] = forced_token_probs
+
+
+                # print()
+                # print()
+                # print()
+                # print()
+                # print(probs)
+                # print()
+                # print(forced_token_probs)
 
                 # Instead of writing to file, append to our list
 

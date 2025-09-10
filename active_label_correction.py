@@ -21,6 +21,8 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 import argparse
 import shutil
+from utils.calculate_bleu_score import calculate_bleu
+import math
 
 
 class ALCPipeline:
@@ -30,8 +32,30 @@ class ALCPipeline:
         self.start_iteration = start_iteration
         self.alc_dir = Path("alcIterations")
         self.models_dir = Path("alcmodels")
-
         self.current_iteration = 0
+        self.log_file_path = "alc_pipeline.log"
+
+        # hyper-parameters
+        # [david] do not hard code sample size, and m_flagged. calculate them dynamically
+        # [david] same goes for eta naught
+
+        rows = self.load_json_rows(self.initial_data)
+        self.data_size = len(rows)
+
+        self.m_flagged = math.floor(self.data_size * 0.02)
+        self.bleu_score_threshold = 0.75
+        self.delta = 0.99
+        self.total_corrected = 0
+
+        # Check if the 'bleu_score' is less than the specified threshold.
+        low_bleu_score_count = 0
+        for item in rows:
+            if 'bleu_score' in item and item['bleu_score'] < self.bleu_score_threshold:
+                low_bleu_score_count += 1
+        self.initial_noise_estimate = low_bleu_score_count/self.data_size
+
+        self.log_to_file(f"m flagged  {self.m_flagged}")
+        self.log_to_file(f"initial noise estimate {self.initial_noise_estimate}")
 
         # Create directories
         self.alc_dir.mkdir(exist_ok=True)
@@ -76,6 +100,24 @@ class ALCPipeline:
         except subprocess.CalledProcessError as e:
             print(f"❌ Training failed with return code: {e.returncode}")
             return None
+
+    def log_to_file(self, message: str, is_error: bool = False):
+        """
+        Logs a message to the console and to the designated log file.
+        Formats the log entry as 'iteration #<num>, <message>'.
+        """
+        # Also print to console for real-time feedback
+        print(message)
+        
+        log_entry = f"iteration #{self.current_iteration}, {message}\n"
+        
+        try:
+            with open(self.log_file_path, 'a', encoding='utf-8') as log_file:
+                log_file.write(log_entry)
+        except IOError as e:
+            # If logging fails, print an error to the console
+            print(f"CRITICAL: Could not write to log file {self.log_file_path}. Reason: {e}")
+      
 
     def run_inference(self, model_path: Path, data_path: Path) -> Optional[Path]:
         """
@@ -139,6 +181,12 @@ class ALCPipeline:
         # Sort by geo_mean (desc)
         sorted_rows = sorted(rows, key=lambda r: r.get("geo_mean", 0), reverse=True)
 
+        #initialize delta (threshold, rows with geo mean higher than this delta will be auto corrected)
+        if self.current_iteration == 0:
+            self.delta = sorted_rows[math.floor(len(sorted_rows)/10)].get('geo_mean')
+            self.log_to_file(f"delta is {self.delta}")
+            
+
         output_path = self.alc_dir / f"iteration_{self.current_iteration}_step_3_geo_mean_sorted.json"
         self.write_json_rows(sorted_rows, output_path)
 
@@ -179,8 +227,8 @@ class ALCPipeline:
         # ALC Strategy: For the most confident model prediction, use them for training instead of the original completion.
         for row in rows:
             geo_mean = row.get("geo_mean", 0)
-            if geo_mean <= 0.998229: # hardcoded delta value. only auto-correct if model is really confident.
-                break
+            if geo_mean <= self.delta: # hardcoded delta value. only auto-correct if model is really confident. [david] todo define a hyper param, also this value is too high
+                continue
 
             humanCorrected = row.get('human_corrected_iteration')
 
@@ -211,6 +259,7 @@ class ALCPipeline:
             return None
 
         rows_corrected = 0
+        rows_reviewed = 0
         # Iterate through rows to find and apply human annotations
         for row in rows:
             # Skip rows that were just auto-corrected in this same iteration
@@ -227,14 +276,19 @@ class ALCPipeline:
 
             # Check if an external human annotation has been provided
             corrected_user_query = row.get('human_annotation')
-            if corrected_user_query and corrected_user_query != row.get('completion.', ''):
+
+            original_completion =  row.get('completion.')
+            bleu_score = calculate_bleu(original_completion, corrected_user_query)
+            if bleu_score < self.bleu_score_threshold:
                 row[f'original_completion_{self.current_iteration}'] = row.get('completion.', '')
                 row['completion.'] = corrected_user_query
                 row[f'human_corrected_iteration'] = self.current_iteration
                 rows_corrected += 1
                 print(f"✓ Applied human correction to row {row.get('id', 'N/A')}")
 
-            if rows_corrected == 2:
+            rows_reviewed  += 1
+
+            if rows_reviewed == self.m_flagged:
                 break
 
         print(f"✓ Total human corrections applied: {rows_corrected}")
@@ -243,10 +297,9 @@ class ALCPipeline:
         self.write_json_rows(rows, output_path)
 
         print(f"✓ Human annotation step completed.")
-        print(f"✓ Human annotation step completed.")
-        return output_path
+        return output_path, rows_corrected
 
-    def run_filter(self, human_corrected_file: Path) -> Optional[Path]:
+    def run_filter(self, human_corrected_file: Path, num_to_be_filtered) -> Optional[Path]:
         """
         Perform filter and save file to filtered file.
         """
@@ -259,7 +312,7 @@ class ALCPipeline:
         rows_filtered = 0
         # Iterate through rows to find and apply filter
         for row in rows:
-            if rows_filtered == 2 :
+            if rows_filtered >= num_to_be_filtered :
                 break
             # Skip rows that were just auto-corrected in this same iteration
             auto_corrected_history = row.get("autocorrected_iterations")
@@ -331,11 +384,23 @@ class ALCPipeline:
             if not sorted_file_forced_geomean: return None
 
             # Step 6: Apply human annotations
-            human_annotated_file = self.run_human_annotation(sorted_file_forced_geomean)
+            human_annotated_file, m_corrected = self.run_human_annotation(sorted_file_forced_geomean)
             if not human_annotated_file: return None
 
+            self.total_corrected += m_corrected
+            eta_k = self.initial_noise_estimate - (self.total_corrected / self.data_size)
+            p_mp_k = m_corrected / self.m_flagged
+
+            if p_mp_k > eta_k:
+                num_to_be_filtered = 3 * m_corrected
+            else:
+                num_to_be_filtered = 0
+
+            log_msg = f"at iteration {self.current_iteration} eta_k: {eta_k} p_mp_k: {p_mp_k} m_corrected {m_corrected} to be filtered {num_to_be_filtered}"
+            self.log_to_file(log_msg)
+
             # Step 7: Apply filter for next iteration
-            filtered_file = self.run_filter(human_annotated_file)
+            filtered_file = self.run_filter(human_annotated_file, num_to_be_filtered)
             if not filtered_file: return None
 
             # Step 8: Create dataset for the next iteration
@@ -394,7 +459,6 @@ def main():
         default=0,
         help="Iteration number to start from (default: 0)"
     )
-
 
     args = parser.parse_args()
 

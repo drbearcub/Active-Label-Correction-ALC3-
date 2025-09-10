@@ -62,10 +62,10 @@ def transform_jsonl_to_json(input_file_path, output_file_path):
 # --- How to use the script ---
 
 # 1. Replace 'input.jsonl' with the actual path to your JSONL file.
-input_filename = './rawdata/validation_formatted.jsonl'
+input_filename = './rawdata/train_formatted.jsonl'
 
 # 2. Replace 'output.json' with the desired name for your new JSON file.
-output_filename = 'alcIterations/iteration_a_dataset.json'
+output_filename = 'alcIterations/iteration_aaa_dataset.json'
 
 # 3. (Optional) Create a dummy input file for testing purposes.
 # If you don't have your file ready, you can uncomment the block below

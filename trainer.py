@@ -284,6 +284,7 @@ def preprocess_for_qa_json(examples, tokenizer, block_size, current_iteration):
     Expected input format: {"prompt": "...[ResolvedQuery]", "completion": "answer"}
     """
     eos_id = tokenizer.eos_token_id
+    tokenizer.truncation_side = "left"
 
     outputs = {"input_ids": [], "attention_mask": [], "labels": []}
 
@@ -291,11 +292,13 @@ def preprocess_for_qa_json(examples, tokenizer, block_size, current_iteration):
 
     num_examples = len(examples["course_name"])  # length of the batch
 
-    for id, courseName, userQuery, completion, autoCorrectionIterations, filteredIterations, inference, geo_mean, forced_geo_mean in zip(
+    for id, courseName, userQuery, completion, groundTruth, pastChat, autoCorrectionIterations, filteredIterations, inference, geo_mean, forced_geo_mean in zip(
             examples["id"],
             examples["course_name"],
             examples["user_query"],
             examples["completion."],
+            examples["groundtruth"],
+            examples.get("pastchat", [[]] * num_examples),
             examples.get("autocorrected_iterations", [[]] * num_examples),
             examples.get("filtered_iterations", [[]] * num_examples),
             examples.get("inference", [None] * num_examples),
@@ -306,7 +309,7 @@ def preprocess_for_qa_json(examples, tokenizer, block_size, current_iteration):
         # print("one example ", "courseName: ", courseName, "userQuery: ", userQuery,"completion: ", completion, "autoCorrectionIterations: ", autoCorrectionIterations, inference, geo_mean, forced_geo_mean)
 
         prompt = courseName + userQuery
-
+        completion_for_training = completion
         if autoCorrectionIterations is None:
             autoCorrectionIterations = []
 
@@ -321,32 +324,107 @@ def preprocess_for_qa_json(examples, tokenizer, block_size, current_iteration):
             if geo_mean > forced_geo_mean:
                 print(f"******* [David] at iteration {current_iteration}, auto corrected example, use inference for training for {id} ******")
                 full_text = prompt + inference
+                completion_for_training = inference
             else:
                 full_text = prompt + completion
                 print(f"***** [David] at iteration {current_iteration}, inference result is worse than original, do not use inference for training for {id} *****")
         else:
             full_text = prompt + completion
 
-        #print(f"[Processing] {full_text} for {id}")
+        courseNameEnc = tokenizer(courseName,
+                truncation=True,
+                max_length=block_size-1,
+                add_special_tokens=True)
         
-        # Tokenize the full text
-        enc = tokenizer(full_text,
-                        truncation=True,
-                        max_length=block_size-1,
-                        add_special_tokens=False)
+        userQueryEnc = tokenizer(userQuery,
+                truncation=True,
+                max_length=block_size-1,
+                add_special_tokens=True)
 
-        input_ids = enc["input_ids"] + [eos_id]
+        gtEnc = tokenizer(groundTruth,
+            truncation=True,
+            max_length=block_size-1,
+            add_special_tokens=True)
+        
+        completionEnc = tokenizer(completion_for_training,
+            truncation=True,
+            max_length=block_size-1,
+            add_special_tokens=True)
+        
+        course_name_ids = courseNameEnc["input_ids"]
+        user_query_ids = userQueryEnc["input_ids"]
+        ground_truth_ids = gtEnc["input_ids"]
+        completion_ids = completionEnc["input_ids"]
+
+        pastChatStr = ""
+        if pastChat is not None :
+            pastChatStr = pastChatStr + "".join(
+                f"{role.capitalize()}: {text}"
+                for message in pastChat
+                for role, text in message.items()
+            )
+        contextLength = tokenizer.model_max_length
+        maxPastChatTokenLength = contextLength - len(course_name_ids) - len(user_query_ids) - len(ground_truth_ids) - len(completion_ids) - 1
+        pastChatEnc = tokenizer(
+            pastChatStr,
+            truncation=True,
+            max_length=maxPastChatTokenLength,
+            add_special_tokens=True,
+        )
+        
+        print("max past chat token is ", maxPastChatTokenLength)
+
+        #old trainer code with no bug
+        # print(f"[Processing] {full_text} for {id}")
+        
+        # # Tokenize the full text
+        # enc = tokenizer(full_text,
+        #                 truncation=True,
+        #                 max_length=block_size-1,
+        #                 add_special_tokens=True)
+
+        # input_ids = enc["input_ids"] + [eos_id]
+        # labels = input_ids.copy()
+
+        # # Tokenize just the prompt to find where to start unmasking
+        # prompt_enc = tokenizer(prompt,
+        #                       add_special_tokens=True)
+        # prompt_length = len(prompt_enc["input_ids"])
+        
+        # # Mask the prompt tokens (set to -100 so they don't contribute to loss)
+        # for i in range(min(prompt_length, len(labels))):
+        #     labels[i] = -100
+
+        # outputs["input_ids"].append(input_ids)
+        # outputs["attention_mask"].append([1] * len(input_ids))
+        # outputs["labels"].append(labels)
+
+        # new trainer code with maybe some bugs
+        past_chat_special_token_ids = tokenizer("[PastChat]", add_special_tokens=True)["input_ids"]
+        pastChat_ids  = pastChatEnc["input_ids"] 
+
+        # Construct final input sequence
+        input_ids = (
+            course_name_ids
+            + past_chat_special_token_ids
+            + pastChat_ids
+            + user_query_ids
+            + completion_ids
+            + [eos_id]
+        )
+
         labels = input_ids.copy()
 
-        # Tokenize just the prompt to find where to start unmasking
-        prompt_enc = tokenizer(prompt,
-                              add_special_tokens=False)
-        prompt_length = len(prompt_enc["input_ids"])
-        
-        # Mask the prompt tokens (set to -100 so they don't contribute to loss)
+        tokens = tokenizer.convert_ids_to_tokens(input_ids)
+        # Figure out how many tokens belong to the "prompt" (everything before completion)
+        #prompt_length = len(course_name_ids) + len(user_query_ids)
+        prompt_length = len(course_name_ids) + len(past_chat_special_token_ids) + len(pastChat_ids) + len(user_query_ids)
+
+        # Mask the prompt so loss is only calculated on completion
         for i in range(min(prompt_length, len(labels))):
             labels[i] = -100
 
+        # Add to batch outputs
         outputs["input_ids"].append(input_ids)
         outputs["attention_mask"].append([1] * len(input_ids))
         outputs["labels"].append(labels)
@@ -504,7 +582,7 @@ def main():
     # -------------------------------------------------------------
     special_tokens = {
         "additional_special_tokens": [
-            "[Course]",
+            "[CourseName]",
             "[PastChat]",
             "[UserQuery]",
             "[ResolvedQuery]",
