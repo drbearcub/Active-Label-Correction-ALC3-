@@ -51,7 +51,7 @@ def parse_args():
     return parser.parse_args()
 
 
-def split_prompt_completion(item: Union[str, dict]) -> tuple[str, str]:
+def split_prompt_completion_old(item: Union[str, dict]) -> tuple[str, str]:
     """
     Extracts prompt and completion from a data item.
     The item can be a string (from a .txt/.jsonl file) or a dict (from a .json file).
@@ -63,6 +63,56 @@ def split_prompt_completion(item: Union[str, dict]) -> tuple[str, str]:
     prompt = f"{course_name}{user_query}"
     completion = item.get('completion.', '')
     return prompt, completion
+
+from typing import Union, Tuple
+
+def split_prompt_completion(item: Union[str, dict], tokenizer) -> Tuple[list[int], list[int]]:
+    """
+    Extracts prompt and completion token IDs from a data item.
+    The item can be a string (from .txt/.jsonl) or a dict (from .json).
+    """
+    # Handle JSON/dict format
+    course_name = item.get('course_name', '')
+    user_query = item.get('user_query', '')
+    past_chat = item.get('pastchat', [])
+    completion = item.get('completion.', '')
+    ground_truth = item.get('groundtruth', '')
+
+    # Build past chat string
+    past_chat_str = ""
+    if past_chat:
+        past_chat_str = "".join(
+            f"{role.capitalize()}: {text}"
+            for message in past_chat
+            for role, text in message.items()
+        )
+
+    # Tokenize completion and ground truth to compute max length
+    completion_ids = tokenizer(completion, add_special_tokens=True)["input_ids"]
+    ground_truth_ids = tokenizer(ground_truth, add_special_tokens=True)["input_ids"]
+
+    # Max length for input_ids (leave space for EOS, special tokens)
+    max_training_ids_length = tokenizer.model_max_length - len(ground_truth_ids) - len(completion_ids) - 2
+
+    # Tokenize the full text for inference
+    text_for_inference = past_chat_str + course_name + user_query + completion
+    encoded_inference_ids = tokenizer(
+        text_for_inference,
+        truncation=True,
+        max_length=max_training_ids_length,
+        add_special_tokens=True
+    )["input_ids"]
+
+    # Find the [ResolvedQuery] special token if you inserted it
+    resolved_query_token_id = tokenizer.convert_tokens_to_ids("[ResolvedQuery]")
+    if resolved_query_token_id in encoded_inference_ids:
+        end_of_prompt_index = encoded_inference_ids.index(resolved_query_token_id)
+        prompt_ids = encoded_inference_ids[: end_of_prompt_index + 1]
+ 
+
+    prompt = tokenizer.decode(prompt_ids, skip_special_tokens=False)
+
+    return "[PastChat]"+prompt, completion
 
 def generate_answer(prompt: str, model, tokenizer):
     """Generate continuation for a single prompt and return per-token probabilities.
@@ -132,6 +182,7 @@ def main():
     print("Loading model …")
     model = AutoModelForCausalLM.from_pretrained(model_path)
     tokenizer = AutoTokenizer.from_pretrained(model_path)
+    tokenizer.truncation_side = "left"
     print("Model ready.\n")
 
     if not data_path.exists():
@@ -149,7 +200,7 @@ def main():
             iterable = tqdm(data_source, desc="Generating", unit="example")
             for idx, item in enumerate(iterable):
 
-                prompt, completion = split_prompt_completion(item)
+                prompt, completion = split_prompt_completion(item, tokenizer)
 
                 try:
                     answer, token_details = generate_answer(prompt, model, tokenizer)
@@ -157,7 +208,7 @@ def main():
                     print(f"Error generating answer for item {idx}: {e}")
                     continue
 
-                print("PROMPT:", prompt)
+                # print("PROMPT:", prompt)
                 print("COMPLETION:", completion)
                 print("ANSWER:", answer)
 

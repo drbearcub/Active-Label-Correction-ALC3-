@@ -1,5 +1,5 @@
 import json
-
+from calculate_bleu_score import calculate_bleu
 
 def transform_jsonl_to_json(input_file_path, output_file_path):
     """
@@ -37,11 +37,15 @@ def transform_jsonl_to_json(input_file_path, output_file_path):
                     'completion.': original_record.get('gpt3_5_jill'),
                     'human_annotation': original_record.get('gpt4o'),
                     'groundtruth': original_record.get('ground_truth'),
-                    'pastchat': original_record.get('pastChat', [])
+                    'pastchat': original_record.get('pastChat', []),
+                    'bleu_score': calculate_bleu(original_record.get('gpt3_5_jill'), original_record.get('ground_truth'))
                 }
 
                 # 5. Add the newly created record to our list
                 transformed_data.append(new_record)
+
+                if len(transformed_data) == 500:
+                    break
 
         # Open the output file for writing
         with open(output_file_path, 'w', encoding='utf-8') as outfile:

@@ -17,29 +17,34 @@ def calculate_bleu(completion, groundtruth):
 def main(input_file, output_file=None):
     # Load JSON list from file
     noise = 0
+    avg_score = 0
     with open(input_file, "r", encoding="utf-8") as f:
         data = json.load(f)
 
     # --- This section is unchanged ---
     # Compute BLEU for each element
     for item in data:
-        comp = item.get("completion.", "")
+        #comp = item.get("completion.", "")
+        comp = item.get("inference", "")
         truth = item.get("groundtruth", "")
         bleu = calculate_bleu(comp.lower(), truth.lower())
         item["bleu_score"] = bleu
+
         if bleu < 0.75:
             noise += 1
+        
 
     # Print results
     for item in data:
-        print(f"ID: {item['id']}, BLEU: {item['bleu_score']:.4f}")
+        #print(f"ID: {item['id']}, BLEU: {item['bleu_score']:.4f}")
+        avg_score += item['bleu_score']
     # --- End of unchanged section ---
 
     # --------------------------------------------------------------------
     # NEW: Plotting the BLEU scores
     # --------------------------------------------------------------------
     # Extract all bleu scores into a list
-    bleu_scores = [item['bleu_score'] for item in data if 'bleu_score' in item]
+    bleu_scores = [item['bleu_score'] for item in data if 'bleu_score' in item and item['bleu_score'] < 0.95]
 
     if not bleu_scores:
         print("\nNo BLEU scores were calculated, skipping histogram.")
@@ -74,6 +79,7 @@ def main(input_file, output_file=None):
             json.dump(data, f, indent=4, ensure_ascii=False)
 
     print("noise " , noise)
+    print("avg score ", avg_score / 500)
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
@@ -83,5 +89,4 @@ if __name__ == "__main__":
     input_file = sys.argv[1]
     output_file = sys.argv[2] if len(sys.argv) > 2 else None
     main(input_file, output_file)
-    score = calculate_bleu("using formal logic, can plans be written and evaluated? refer to the lecture on scripts", "Using formal logic, hahaha hahah ahah aa  can plans be written and evaluated? Refer to the planning lecture.")
-    print(score)
+    

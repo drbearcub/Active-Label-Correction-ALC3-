@@ -20,6 +20,8 @@ avg_forced_geo_means = []
 iterations = []
 
 for file in files:
+    if file == "alcIterations/iteration_7_step_2_probabilities.json":
+        break
     with open(file, "r") as f:
         data = json.load(f)  # each file contains a list of dictionaries
 
